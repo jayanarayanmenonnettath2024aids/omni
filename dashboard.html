@@ -1,0 +1,838 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trade Intelligence Platform</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        corp: {
+                            navy: '#0f2042',
+                            blue: '#0052cc',
+                            light: '#f4f5f7',
+                            gray: '#5e6c84',
+                            dark: '#172b4d',
+                            border: '#dfe1e6',
+                            hover: '#ebecf0'
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['"IBM Plex Sans"', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .enterprise-shadow { box-shadow: 0 1px 3px rgba(9, 30, 66, 0.13), 0 1px 2px rgba(9, 30, 66, 0.1); }
+        .table-header th { background-color: #fafbfc; border-bottom: 2px solid #dfe1e6; color: #5e6c84; font-size: 0.75rem; text-transform: uppercase; font-weight: 600; padding: 12px 16px; text-align: left; }
+        .table-row td { border-bottom: 1px solid #dfe1e6; padding: 12px 16px; font-size: 0.875rem; color: #172b4d; }
+        .table-row:hover td { background-color: #ebecf0; cursor: pointer; }
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #f4f5f7; }
+        ::-webkit-scrollbar-thumb { background: #c1c7d0; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #a5adba; }
+        .nav-item { display: flex; align-items: center; gap: 12px; padding: 10px 16px; color: #a5adba; font-size: 0.875rem; font-weight: 500; transition: all 0.2s; border-left: 3px solid transparent; cursor: pointer; }
+        .nav-item:hover { color: #fff; background-color: rgba(255,255,255,0.05); }
+        .nav-item.active { color: #fff; background-color: rgba(255,255,255,0.1); border-left-color: #4c9aff; }
+    </style>
+</head>
+<body class="bg-corp-light font-sans text-corp-dark overflow-hidden h-screen flex" x-data="{ 
+    isLoggedIn: false, 
+    userRole: 'super', 
+    currentTab: 'dashboard',
+    userRoles: {
+        'export': { name: 'Export Manager', icon: 'fa-plane-departure', color: 'bg-emerald-600' },
+        'import': { name: 'Import Desk', icon: 'fa-ship', color: 'bg-amber-600' },
+        'domestic': { name: 'Logistics Lead', icon: 'fa-truck', color: 'bg-blue-600' },
+        'super': { name: 'Port Authority (Super)', icon: 'fa-shield-alt', color: 'bg-indigo-700' }
+    },
+    login(role) {
+        this.userRole = role;
+        this.isLoggedIn = true;
+        this.currentTab = 'dashboard';
+        initCharts();
+    }
+}">
+    
+    <!-- LOGIN OVERLAY -->
+    <div x-show="!isLoggedIn" class="fixed inset-0 z-[100] bg-corp-navy flex items-center justify-center p-6">
+        <div class="bg-white w-full max-w-4xl rounded-xl shadow-2xl flex overflow-hidden">
+            <div class="w-1/2 bg-blue-700 p-12 text-white flex flex-col justify-between">
+                <div>
+                    <div class="w-10 h-10 bg-white rounded flex items-center justify-center mb-6 text-blue-700 font-bold">T</div>
+                    <h1 class="text-3xl font-bold mb-4">Trade Intelligence Platform</h1>
+                    <p class="text-blue-100 leading-relaxed">Unified logistics monitoring with Role-Based Access Control. Select your department terminal to continue.</p>
+                </div>
+                <div class="text-xs text-blue-300 uppercase tracking-widest font-bold">KIT Hackathon Edition • TNI26184</div>
+            </div>
+            <div class="w-1/2 p-12 bg-gray-50">
+                <h2 class="text-xl font-bold text-gray-800 mb-8">Access Terminal</h2>
+                <div class="space-y-4">
+                    <button @click="login('export')" class="w-full flex items-center gap-4 p-4 bg-white border border-gray-200 rounded-lg hover:border-emerald-500 hover:bg-emerald-50 transition-all group">
+                        <div class="w-10 h-10 rounded bg-emerald-100 text-emerald-600 flex items-center justify-center group-hover:bg-emerald-600 group-hover:text-white"><i class="fas fa-plane-departure"></i></div>
+                        <div class="text-left font-semibold text-gray-700">Export Management Desk</div>
+                    </button>
+                    <button @click="login('import')" class="w-full flex items-center gap-4 p-4 bg-white border border-gray-200 rounded-lg hover:border-amber-500 hover:bg-amber-50 transition-all group">
+                        <div class="w-10 h-10 rounded bg-amber-100 text-amber-600 flex items-center justify-center group-hover:bg-amber-600 group-hover:text-white"><i class="fas fa-ship"></i></div>
+                        <div class="text-left font-semibold text-gray-700">Global Import Desk</div>
+                    </button>
+                    <button @click="login('domestic')" class="w-full flex items-center gap-4 p-4 bg-white border border-gray-200 rounded-lg hover:border-blue-500 hover:bg-blue-50 transition-all group">
+                        <div class="w-10 h-10 rounded bg-blue-100 text-blue-600 flex items-center justify-center group-hover:bg-blue-600 group-hover:text-white"><i class="fas fa-truck"></i></div>
+                        <div class="text-left font-semibold text-gray-700">Domestic Logistics Hub</div>
+                    </button>
+                    <button @click="login('super')" class="w-full flex items-center gap-4 p-4 bg-white border border-gray-200 rounded-lg hover:border-indigo-500 hover:bg-indigo-50 transition-all group">
+                        <div class="w-10 h-10 rounded bg-indigo-100 text-indigo-600 flex items-center justify-center group-hover:bg-indigo-600 group-hover:text-white"><i class="fas fa-shield-alt"></i></div>
+                        <div class="text-left font-semibold text-gray-700 font-bold">Port Authority (Super Access)</div>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Left Sidebar -->
+    <aside class="w-64 bg-corp-navy flex flex-col h-full flex-shrink-0 z-20">
+        <div class="h-14 flex items-center px-5 border-b border-gray-700 bg-white shadow-sm" style="background-color: #0b1731;">
+            <div class="w-6 h-6 bg-blue-500 rounded flex items-center justify-center mr-3 text-white text-xs font-bold">T</div>
+            <span class="text-white font-bold text-sm tracking-wide">Trade Intelligence</span>
+        </div>
+        
+        <div class="flex-1 overflow-y-auto py-4">
+            <div class="px-4 mb-2 text-xs font-bold text-gray-500 uppercase tracking-wider">Main</div>
+            <div class="nav-item" :class="currentTab === 'dashboard' ? 'active' : ''" @click="currentTab = 'dashboard'"><i class="fas fa-chart-line w-4 text-center"></i> Dashboard</div>
+            <div class="nav-item" :class="currentTab === 'ingestion' ? 'active' : ''" @click="currentTab = 'ingestion'"><i class="fas fa-network-wired w-4 text-center"></i> Data Ingestion</div>
+            <div class="nav-item" :class="currentTab === 'erp' ? 'active' : ''" @click="currentTab = 'erp'"><i class="fas fa-database w-4 text-center"></i> ERP Data</div>
+            <div class="nav-item"><i class="fas fa-file-invoice w-4 text-center"></i> Documents</div>
+            
+            <div class="px-4 mb-2 mt-6 text-xs font-bold text-gray-500 uppercase tracking-wider">Master Data</div>
+            <div class="nav-item"><i class="fas fa-building w-4 text-center"></i> Companies</div>
+            <div class="nav-item"><i class="fas fa-ship w-4 text-center"></i> Shipments</div>
+            <div class="nav-item" :class="currentTab === 'map' ? 'active' : ''" @click="currentTab = 'map'"><i class="fas fa-globe w-4 text-center"></i> Trade Map</div>
+            <div class="nav-item"><i class="fas fa-box w-4 text-center"></i> Products</div>
+            
+            <div class="px-4 mb-2 mt-6 text-xs font-bold text-gray-500 uppercase tracking-wider">Intelligence</div>
+            <div class="nav-item" :class="currentTab === 'ai' ? 'active' : ''" @click="currentTab = 'ai'"><i class="fas fa-robot w-4 text-center"></i> AI Assistant</div>
+            <div class="nav-item" :class="currentTab === 'audit' ? 'active' : ''" @click="currentTab = 'audit'" x-show="userRole === 'super'"><i class="fas fa-microscope w-4 text-center"></i> Audit Control</div>
+            <div class="nav-item"><i class="fas fa-chart-pie w-4 text-center"></i> Trade Analytics</div>
+            <div class="nav-item"><i class="fas fa-file-alt w-4 text-center"></i> Reports</div>
+
+            <div class="px-4 mb-2 mt-6 text-xs font-bold text-gray-500 uppercase tracking-wider">System</div>
+            <div class="nav-item" :class="currentTab === 'architecture' ? 'active' : ''" @click="currentTab = 'architecture'"><i class="fas fa-project-diagram w-4 text-center"></i> System Architecture</div>
+            <div class="nav-item"><i class="fas fa-cog w-4 text-center"></i> Admin Settings</div>
+        </div>
+    </aside>
+
+    <!-- Main Content wrapper -->
+    <div class="flex-1 flex flex-col h-full overflow-hidden">
+        
+        <!-- Top Header -->
+        <header class="h-14 bg-white border-b border-corp-border flex items-center justify-between px-6 z-10 box-border">
+            <div class="flex items-center gap-4">
+                <i class="fas fa-bars text-corp-gray cursor-pointer hover:text-corp-dark"></i>
+                <div class="relative">
+                    <i class="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm"></i>
+                    <input type="text" placeholder="Global search..." class="pl-9 pr-4 py-1.5 w-80 bg-corp-light border border-corp-border rounded text-sm focus:outline-none focus:border-blue-500 focus:bg-white transition-colors">
+                </div>
+            </div>
+            <div class="flex items-center gap-5">
+                <div class="flex flex-col items-end mr-2">
+                    <span class="text-[10px] font-bold text-corp-gray uppercase">Event Countdown</span>
+                    <span class="text-[10px] text-blue-600 font-bold">14-03-2026 @ KIT</span>
+                </div>
+                <span class="bg-blue-600 text-white text-[10px] font-bold px-2 py-0.5 rounded shadow-sm">KIT HACKATHON EDITION</span>
+                <span class="bg-blue-50 text-blue-700 border border-blue-200 text-xs font-semibold px-2 py-1 rounded">Trade Admin</span>
+                <i class="fas fa-bell text-corp-gray hover:text-corp-dark cursor-pointer relative">
+                    <span class="absolute -top-1 -right-1 w-2 h-2 bg-red-500 rounded-full"></span>
+                </i>
+                <div class="flex items-center gap-2 cursor-pointer border-l border-corp-border pl-5">
+                    <div class="w-8 h-8 rounded-full bg-corp-navy text-white flex items-center justify-center font-bold text-sm">JS</div>
+                    <span class="text-sm font-medium">John Smith</span>
+                    <i class="fas fa-chevron-down text-xs text-corp-gray"></i>
+                </div>
+            </div>
+        </header>
+
+        <!-- Dynamic Content Area -->
+        <main class="flex-1 overflow-auto bg-corp-light p-6">
+            
+            <!-- VIEW: DASHBOARD -->
+            <div x-show="currentTab === 'dashboard'" style="display: none;" x-transition>
+                <div class="flex justify-between items-center mb-6">
+                    <div>
+                        <h1 class="text-2xl font-semibold text-corp-dark tracking-tight" x-text="userRoles[userRole].name + ' Dashboard'"></h1>
+                        <p class="text-sm text-gray-500" x-show="userRole === 'super'">Global unified view of all trade channels.</p>
+                        <p class="text-sm text-gray-500" x-show="userRole === 'export'">Tracking outgoing shipments and international manifests.</p>
+                    </div>
+                    <div class="flex gap-2 text-sm">
+                        <button @click="isLoggedIn = false" class="bg-white border border-red-200 text-red-600 px-3 py-1.5 rounded hover:bg-red-50 font-medium"><i class="fas fa-sign-out-alt mr-2"></i>Switch Desk</button>
+                        <button class="bg-corp-blue text-white px-3 py-1.5 rounded hover:bg-blue-700 font-medium"><i class="fas fa-download mr-2"></i>Export Report</button>
+                    </div>
+                </div>
+
+                <!-- Role-Aware KPI Widgets -->
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                    <div class="bg-white p-4 rounded border border-corp-border enterprise-shadow" :class="userRole === 'export' || userRole === 'super' ? '' : 'opacity-40'">
+                        <span class="text-[10px] font-bold text-emerald-600 uppercase tracking-widest">Active Exports</span>
+                        <div class="flex items-end justify-between mt-2">
+                            <span class="text-2xl font-semibold text-corp-dark">412</span>
+                            <i class="fas fa-plane-departure text-gray-200 text-xl"></i>
+                        </div>
+                    </div>
+                    <div class="bg-white p-4 rounded border border-corp-border enterprise-shadow" :class="userRole === 'import' || userRole === 'super' ? '' : 'opacity-40'">
+                        <span class="text-[10px] font-bold text-amber-600 uppercase tracking-widest">Active Imports</span>
+                        <div class="flex items-end justify-between mt-2">
+                            <span class="text-2xl font-semibold text-corp-dark">189</span>
+                            <i class="fas fa-ship text-gray-200 text-xl"></i>
+                        </div>
+                    </div>
+                    <div class="bg-white p-4 rounded border border-corp-border enterprise-shadow" :class="userRole === 'domestic' || userRole === 'super' ? '' : 'opacity-40'">
+                        <span class="text-[10px] font-bold text-blue-600 uppercase tracking-widest">Domestic Hub</span>
+                        <div class="flex items-end justify-between mt-2">
+                            <span class="text-2xl font-semibold text-corp-dark">647</span>
+                            <i class="fas fa-truck text-gray-200 text-xl"></i>
+                        </div>
+                    </div>
+                    <div class="bg-white p-4 rounded border border-corp-border enterprise-shadow bg-gray-50" x-show="userRole === 'super'">
+                        <span class="text-[10px] font-bold text-indigo-600 uppercase tracking-widest">Port Utilization</span>
+                        <div class="flex items-end justify-between mt-2">
+                            <span class="text-2xl font-semibold text-corp-dark">82%</span>
+                            <i class="fas fa-warehouse text-gray-200 text-xl"></i>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Charts (Trade Insights) -->
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+                    <div class="bg-white border border-corp-border rounded enterprise-shadow p-5">
+                        <h3 class="text-sm font-semibold text-corp-dark mb-4">Monthly Trade Activity (Volume & Value)</h3>
+                        <div class="h-64"><canvas id="activityChart"></canvas></div>
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div class="bg-white border border-corp-border rounded enterprise-shadow p-5">
+                            <h3 class="text-sm font-semibold text-corp-dark mb-4">Top Traded Products</h3>
+                            <div class="h-48 relative"><canvas id="productsChart"></canvas></div>
+                        </div>
+                        <div class="bg-white border border-corp-border rounded enterprise-shadow p-5 flex flex-col">
+                            <h3 class="text-sm font-semibold text-corp-dark mb-4">Port Activity</h3>
+                            <div class="flex-1 flex flex-col justify-center gap-3">
+                                <div class="flex justify-between items-center text-sm">
+                                    <span class="text-corp-gray">Chennai Port</span>
+                                    <div class="w-24 h-2 bg-corp-light rounded-full overflow-hidden"><div class="w-3/4 h-full bg-blue-500"></div></div>
+                                </div>
+                                <div class="flex justify-between items-center text-sm">
+                                    <span class="text-corp-gray">Singapore</span>
+                                    <div class="w-24 h-2 bg-corp-light rounded-full overflow-hidden"><div class="w-1/2 h-full bg-blue-500"></div></div>
+                                </div>
+                                <div class="flex justify-between items-center text-sm">
+                                    <span class="text-corp-gray">Dubai (Jebel Ali)</span>
+                                    <div class="w-24 h-2 bg-corp-light rounded-full overflow-hidden"><div class="w-2/5 h-full bg-blue-500"></div></div>
+                                </div>
+                                <div class="flex justify-between items-center text-sm">
+                                    <span class="text-corp-gray">Mundra Port</span>
+                                    <div class="w-24 h-2 bg-corp-light rounded-full overflow-hidden"><div class="w-1/4 h-full bg-blue-500"></div></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Recent Activity Table -->
+                <div class="bg-white border border-corp-border rounded enterprise-shadow overflow-hidden">
+                    <div class="px-5 py-4 border-b border-corp-border flex justify-between items-center">
+                        <h3 class="text-sm font-semibold text-corp-dark">Recent Activity</h3>
+                        <a href="#" class="text-blue-600 text-sm font-medium hover:underline">View All</a>
+                    </div>
+                    <table class="w-full">
+                        <tr class="table-header">
+                            <th>Shipment ID</th>
+                            <th>Company</th>
+                            <th>Product</th>
+                            <th>Route</th>
+                            <th>Status</th>
+                            <th class="text-right">Last Updated</th>
+                        </tr>
+                        <tr class="table-row">
+                            <td class="font-medium text-blue-600">SBC-EXP-552</td>
+                            <td>TechCorp Industries</td>
+                            <td>Electronics Mfg Components</td>
+                            <td>Chennai → Dubai</td>
+                            <td><span class="bg-green-100 text-green-800 px-2 py-0.5 rounded text-xs font-semibold">Cleared</span></td>
+                            <td class="text-right text-corp-gray text-xs">2026-03-30</td>
+                        </tr>
+                        <tr class="table-row">
+                            <td class="font-medium text-blue-600">SBC-IMP-109</td>
+                            <td>Oceanic Importers</td>
+                            <td>Specialty Machinery</td>
+                            <td>Singapore → Chennai</td>
+                            <td><span class="bg-yellow-100 text-yellow-800 px-2 py-0.5 rounded text-xs font-semibold">Pending Customs</span></td>
+                            <td class="text-right text-corp-gray text-xs">2026-04-01</td>
+                        </tr>
+                        <tr class="table-row">
+                            <td class="font-medium text-blue-600">SDB-DOM-004</td>
+                            <td>Metro Retailers</td>
+                            <td>FMCG Goods</td>
+                            <td>Coimbatore → Chennai</td>
+                            <td><span class="bg-blue-100 text-blue-800 px-2 py-0.5 rounded text-xs font-semibold">In Transit</span></td>
+                            <td class="text-right text-corp-gray text-xs">2026-03-31</td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+
+            <!-- VIEW: ERP DATA -->
+            <div x-show="currentTab === 'erp'" style="display: none;" x-transition>
+                <h1 class="text-2xl font-semibold text-corp-dark tracking-tight mb-6">ERP Data Master</h1>
+                
+                <!-- Sub-tabs for ERP -->
+                <div class="border-b border-corp-border mb-6 flex gap-6" x-data="{ erpTab: 'transactions' }">
+                    <div class="pb-2 cursor-pointer font-medium text-sm transition-colors border-b-2" :class="erpTab === 'transactions' ? 'border-blue-600 text-blue-600' : 'border-transparent text-corp-gray hover:text-corp-dark'" @click="erpTab = 'transactions'">Transactions / Orders</div>
+                    <div class="pb-2 cursor-pointer font-medium text-sm transition-colors border-b-2" :class="erpTab === 'customers' ? 'border-blue-600 text-blue-600' : 'border-transparent text-corp-gray hover:text-corp-dark'" @click="erpTab = 'customers'">Customers</div>
+                    <div class="pb-2 cursor-pointer font-medium text-sm transition-colors border-b-2" :class="erpTab === 'shipments' ? 'border-blue-600 text-blue-600' : 'border-transparent text-corp-gray hover:text-corp-dark'" @click="erpTab = 'shipments'">Shipment Logs</div>
+                    
+                    <div class="ml-auto pb-2 flex gap-2">
+                        <button class="border border-corp-border bg-white text-corp-dark px-2 rounded hover:bg-corp-hover text-xs"><i class="fas fa-filter text-corp-gray"></i> Filter</button>
+                    </div>
+                </div>
+
+                <div class="bg-white border border-corp-border rounded enterprise-shadow overflow-hidden">
+                    <table class="w-full">
+                        <tr class="table-header">
+                            <th>Invoice Ref</th>
+                            <th>Business Partner</th>
+                            <th>Category</th>
+                            <th>Item Description</th>
+                            <th>Post Date</th>
+                            <th class="text-right">Valuation (INR)</th>
+                        </tr>
+                        <!--ROWS_PLACEHOLDER-->
+                    </table>
+                    <div class="p-3 border-t border-corp-border text-xs text-corp-gray flex justify-between items-center bg-gray-50">
+                        <span>Showing 1 to 5 of 14,204 records</span>
+                        <div class="flex gap-1">
+                            <button class="px-2 py-1 border border-corp-border rounded bg-white text-corp-gray" disabled><i class="fas fa-chevron-left"></i></button>
+                            <button class="px-2 py-1 border border-blue-600 rounded bg-blue-50 text-blue-600 font-bold">1</button>
+                            <button class="px-2 py-1 border border-corp-border rounded bg-white hover:bg-corp-hover">2</button>
+                            <button class="px-2 py-1 border border-corp-border rounded bg-white hover:bg-corp-hover">3</button>
+                            <button class="px-2 py-1 border border-corp-border rounded bg-white hover:bg-corp-hover"><i class="fas fa-chevron-right"></i></button>
+                        </div>
+                    </div>
+                </div>
+
+                <h2 class="text-lg font-semibold text-corp-dark mt-8 mb-4">Port Shipment Logs</h2>
+                <div class="bg-white border border-corp-border rounded enterprise-shadow overflow-hidden">
+                    <table class="w-full">
+                        <tr class="table-header">
+                            <th>Linked Invoice</th>
+                            <th>Customs BOE</th>
+                            <th>Port / Location</th>
+                            <th>Clearance Status</th>
+                            <th>Clearance Date</th>
+                        </tr>
+                        <!--SHIPMENTS_PLACEHOLDER-->
+                    </table>
+                </div>
+            </div>
+
+            <!-- VIEW: DATA INGESTION -->
+            <div x-show="currentTab === 'ingestion'" style="display: none;" x-transition>
+                <div class="flex justify-between items-center mb-6" x-data="{ 
+                    isSyncing: false,
+                    async triggerSync() {
+                        this.isSyncing = true;
+                        try {
+                            const res = await fetch('/api/pipeline/sync', { method: 'POST' });
+                            const data = await res.json();
+                            alert('Data Lake Refreshed Successfully! ' + data.summary.total_records + ' records processed.');
+                            location.reload(); // Refresh to show new data
+                        } catch(e) {
+                            alert('Sync Failed: ' + e);
+                        } finally {
+                            this.isSyncing = false;
+                        }
+                    }
+                }">
+                    <h1 class="text-2xl font-semibold text-corp-dark tracking-tight">Data Ingestion Pipeline</h1>
+                    <button @click="triggerSync()" class="bg-white border border-corp-border text-corp-dark px-3 py-1.5 rounded hover:bg-corp-hover font-medium text-sm disabled:opacity-50" :disabled="isSyncing">
+                        <i class="fas fa-sync-alt mr-2 text-corp-gray" :class="isSyncing ? 'fa-spin' : ''"></i>
+                        <span x-text="isSyncing ? 'Syncing...' : 'Run Manual Sync'"></span>
+                    </button>
+                </div>
+
+                <!-- Pipeline Status -->
+                <div class="bg-white border border-corp-border rounded enterprise-shadow p-6 mb-6">
+                    <h3 class="text-sm font-semibold text-corp-dark mb-5 border-b border-gray-100 pb-2">Real-time ETL Processing</h3>
+                    <div class="flex justify-between items-center px-4">
+                        <div class="flex flex-col items-center">
+                            <div class="w-10 h-10 rounded-full bg-blue-100 text-blue-600 border border-blue-200 flex items-center justify-center mb-2"><i class="fas fa-inbox"></i></div>
+                            <span class="text-xs font-semibold text-corp-dark">Collection</span>
+                            <span class="text-[10px] text-green-500 font-bold">● Active</span>
+                        </div>
+                        <div class="flex-1 h-0.5 bg-blue-500 mx-2"></div>
+                        <div class="flex flex-col items-center border border-transparent">
+                            <div class="w-10 h-10 rounded-full bg-blue-100 text-blue-600 border border-blue-200 flex items-center justify-center mb-2"><i class="fas fa-file-pdf"></i></div>
+                            <span class="text-xs font-semibold text-corp-dark">OCR/Parsing</span>
+                            <span class="text-[10px] text-green-500 font-bold">● Active</span>
+                        </div>
+                        <div class="flex-1 h-0.5 bg-blue-500 mx-2"></div>
+                        <div class="flex flex-col items-center">
+                            <div class="w-10 h-10 rounded-full bg-blue-100 text-blue-600 border border-blue-200 flex items-center justify-center mb-2"><i class="fas fa-brain"></i></div>
+                            <span class="text-xs font-semibold text-corp-dark">NLP Extraction</span>
+                            <span class="text-[10px] text-green-500 font-bold">● Active</span>
+                        </div>
+                        <div class="flex-1 h-0.5 bg-blue-500 mx-2 animate-pulse"></div>
+                        <div class="flex flex-col items-center">
+                            <div class="w-10 h-10 rounded-full bg-blue-600 text-white shadow-lg flex items-center justify-center mb-2 border-2 border-blue-200"><i class="fas fa-fingerprint animate-pulse"></i></div>
+                            <span class="text-xs font-semibold text-corp-dark">Entity Res (MDM)</span>
+                            <span class="text-[10px] text-blue-500 font-bold">Processing</span>
+                        </div>
+                        <div class="flex-1 h-0.5 bg-gray-200 mx-2"></div>
+                        <div class="flex flex-col items-center opacity-50">
+                            <div class="w-10 h-10 rounded-full bg-gray-100 border border-gray-300 text-gray-400 flex items-center justify-center mb-2"><i class="fas fa-database"></i></div>
+                            <span class="text-xs font-semibold text-corp-dark">DB Storage</span>
+                            <span class="text-[10px] text-gray-400 font-bold">Waiting</span>
+                        </div>
+                        <div class="flex-1 h-0.5 bg-gray-200 mx-2"></div>
+                        <div class="flex flex-col items-center opacity-50">
+                            <div class="w-10 h-10 rounded-full bg-gray-100 border border-gray-300 text-gray-400 flex items-center justify-center mb-2"><i class="fas fa-layer-group"></i></div>
+                            <span class="text-xs font-semibold text-corp-dark">Vector Indexing</span>
+                            <span class="text-[10px] text-gray-400 font-bold">Waiting</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Connectors Table -->
+                <div class="bg-white border border-corp-border rounded enterprise-shadow overflow-hidden">
+                    <div class="px-5 py-4 border-b border-corp-border flex justify-between items-center">
+                        <h3 class="text-sm font-semibold text-corp-dark">Active Data Source Connectors</h3>
+                    </div>
+                    <table class="w-full">
+                        <tr class="table-header">
+                            <th>Connector Name</th>
+                            <th>Type</th>
+                            <th>Status</th>
+                            <th>Last Sync Time</th>
+                            <th>Volume (24h)</th>
+                            <th class="text-center">Action</th>
+                        </tr>
+                        <tr class="table-row">
+                            <td class="font-medium">ERP Database Sync (SAP)</td>
+                            <td><span class="border border-purple-200 bg-purple-50 text-purple-700 px-2 rounded text-[10px] font-bold">REST API</span></td>
+                            <td><span class="text-green-600 text-xs font-bold">● Connected</span></td>
+                            <td class="text-sm">2 mins ago</td>
+                            <td class="text-sm">4,502 records</td>
+                            <td class="text-center"><i class="fas fa-ellipsis-h text-corp-gray cursor-pointer"></i></td>
+                        </tr>
+                        <tr class="table-row">
+                            <td class="font-medium">Corporate IMAP Mailbox</td>
+                            <td><span class="border border-blue-200 bg-blue-50 text-blue-700 px-2 rounded text-[10px] font-bold">EMAIL</span></td>
+                            <td><span class="text-green-600 text-xs font-bold">● Connected</span></td>
+                            <td class="text-sm">5 mins ago</td>
+                            <td class="text-sm">115 emails</td>
+                            <td class="text-center"><i class="fas fa-ellipsis-h text-corp-gray cursor-pointer"></i></td>
+                        </tr>
+                        <tr class="table-row">
+                            <td class="font-medium">Regional Portals Tracker</td>
+                            <td><span class="border border-purple-200 bg-purple-50 text-purple-700 px-2 rounded text-[10px] font-bold">REST API</span></td>
+                            <td><span class="text-green-600 text-xs font-bold">● Connected</span></td>
+                            <td class="text-sm">15 mins ago</td>
+                            <td class="text-sm">82 updates</td>
+                            <td class="text-center"><i class="fas fa-ellipsis-h text-corp-gray cursor-pointer"></i></td>
+                        </tr>
+                        <tr class="table-row">
+                            <td class="font-medium">Customs PDF Directory Watch</td>
+                            <td><span class="border border-gray-200 bg-gray-50 text-gray-700 px-2 rounded text-[10px] font-bold">FILE SYSTEM</span></td>
+                            <td><span class="text-green-600 text-xs font-bold">● Connected</span></td>
+                            <td class="text-sm">1 hr ago</td>
+                            <td class="text-sm">14 files</td>
+                            <td class="text-center"><i class="fas fa-ellipsis-h text-corp-gray cursor-pointer"></i></td>
+                        </tr>
+                        <tr class="table-row">
+                            <td class="font-medium">Monthly Master Data Sheets</td>
+                            <td><span class="border border-green-200 bg-green-50 text-green-700 px-2 rounded text-[10px] font-bold">SPREADSHEET</span></td>
+                            <td><span class="text-yellow-600 text-xs font-bold">● Scheduled</span></td>
+                            <td class="text-sm">Yesterday</td>
+                            <td class="text-sm">1 file</td>
+                            <td class="text-center"><i class="fas fa-ellipsis-h text-corp-gray cursor-pointer"></i></td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+
+            <!-- VIEW: AI QUERY ASSISTANT -->
+            <div x-show="currentTab === 'ai'" style="display: none;" class="h-full flex flex-col" x-transition x-data="{ 
+                query: '', 
+                messages: [
+                    { role: 'ai', content: 'Hello! I am your Trade Intelligence Assistant. You can **speak** or type to me. I support English and Tamil.' }
+                ],
+                isLoading: false,
+                isRecording: false,
+                currentLang: 'en-IN',
+                async sendQuery() {
+                    if (!this.query.trim()) return;
+                    const userMsg = this.query;
+                    this.messages.push({ role: 'user', content: userMsg });
+                    this.query = '';
+                    this.isLoading = true;
+                    
+                    try {
+                        const response = await fetch('/api/ai/chat', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({ message: userMsg, lang: this.currentLang })
+                        });
+                        const data = await response.json();
+                        this.messages.push({ role: 'ai', content: data.answer });
+                        
+                        // Text-to-Speech Response (Native Priority)
+                        window.speechSynthesis.cancel();
+                        const cleanText = data.answer.replace(/<br>/g, ' ').replace(/[#*]/g, '');
+                        const speech = new SpeechSynthesisUtterance(cleanText);
+                        
+                        if (/[\u0B80-\u0BFF]/.test(cleanText)) {
+                            speech.lang = 'ta-IN';
+                            speech.pitch = 1;
+                            speech.rate = 0.9; // Slightly slower for clarity
+                        } else {
+                            speech.lang = 'en-IN';
+                        }
+                        
+                        window.speechSynthesis.speak(speech);
+                    } catch (e) {
+                        this.messages.push({ role: 'ai', content: 'System Error: Connect to backend for real-time analysis.' });
+                    } finally {
+                        this.isLoading = false;
+                    }
+                },
+                startVoice() {
+                    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                    if (!SpeechRecognition) {
+                        alert('Voice recognition not supported in this browser.');
+                        return;
+                    }
+                    const rec = new SpeechRecognition();
+                    rec.lang = this.currentLang;
+                    this.isRecording = true;
+                    rec.onresult = (e) => {
+                        this.query = e.results[0][0].transcript;
+                        this.isRecording = false;
+                        this.sendQuery();
+                    };
+                    rec.onerror = () => { this.isRecording = false; };
+                    rec.onend = () => { this.isRecording = false; };
+                    rec.start();
+                }
+            }">
+                <div class="flex-1 bg-white border border-corp-border rounded enterprise-shadow flex flex-col overflow-hidden">
+                    <div class="h-14 border-b border-corp-border flex items-center justify-between px-6 bg-gray-50">
+                        <div class="flex items-center">
+                            <i class="fas fa-robot text-blue-600 mr-3 text-lg"></i>
+                            <span class="font-semibold text-corp-dark">Trade Intelligence Assistant</span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                             <span class="text-[10px] font-bold text-gray-400 uppercase">Input Language:</span>
+                             <div class="flex bg-gray-200 p-0.5 rounded text-[10px] font-bold">
+                                 <button @click="currentLang = 'en-IN'" 
+                                         class="px-2 py-0.5 rounded transition-all"
+                                         :class="currentLang === 'en-IN' ? 'bg-white text-corp-blue shadow-sm' : 'text-gray-500'">EN</button>
+                                 <button @click="currentLang = 'ta-IN'" 
+                                         class="px-2 py-0.5 rounded transition-all"
+                                         :class="currentLang === 'ta-IN' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-500'">தமிழ்</button>
+                             </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Chat Area -->
+                    <div class="flex-1 overflow-y-auto p-6 space-y-6 bg-white">
+                        <template x-for="msg in messages">
+                            <div class="flex gap-4" :class="msg.role === 'user' ? 'flex-row-reverse' : ''">
+                                <div class="w-8 h-8 rounded flex items-center justify-center flex-shrink-0 mt-1" :class="msg.role === 'ai' ? 'bg-blue-100' : 'bg-corp-navy text-white text-xs font-bold border border-corp-border'">
+                                    <template x-if="msg.role === 'ai'"><i class="fas fa-robot text-blue-600 text-sm"></i></template>
+                                    <template x-if="msg.role === 'user'"><span>JS</span></template>
+                                </div>
+                                <div class="max-w-2xl">
+                                    <div class="p-4 text-sm rounded-lg" :class="msg.role === 'ai' ? 'bg-gray-50 border border-gray-100 rounded-tl-none text-corp-dark' : 'bg-blue-600 text-white rounded-tr-none shadow-sm'">
+                                        <p x-html="msg.content"></p>
+                                    </div>
+                                    <div x-show="msg.role === 'ai'" class="text-[10px] text-gray-400 mt-1 uppercase tracking-tighter">Verified from Unified Data Lake</div>
+                                </div>
+                            </div>
+                        </template>
+                        <div x-show="isLoading" class="flex gap-4">
+                            <div class="w-8 h-8 rounded bg-blue-100 flex items-center justify-center animate-pulse"><i class="fas fa-spinner fa-spin text-blue-600"></i></div>
+                            <div class="bg-gray-50 border border-gray-100 rounded p-3 text-xs text-gray-400">RAG Pipeline retrieving context...</div>
+                        </div>
+                    </div>
+                    
+                    <!-- Input -->
+                    <div class="p-4 border-t border-corp-border bg-white">
+                        <div class="relative flex items-center gap-2">
+                            <button @click="startVoice()" 
+                                    class="w-10 h-10 rounded-full flex items-center justify-center transition-all shadow-sm"
+                                    :class="isRecording ? 'bg-red-500 text-white animate-pulse' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'">
+                                <i class="fas" :class="isRecording ? 'fa-microphone' : 'fa-microphone-alt'"></i>
+                            </button>
+                            <input type="text" x-model="query" @keyup.enter="sendQuery()" placeholder="Ask via voice or type..." class="flex-1 px-4 py-3 border border-gray-300 rounded focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-sm shadow-sm transition-all">
+                            <button @click="sendQuery()" class="w-10 h-10 bg-blue-600 text-white rounded-full flex items-center justify-center hover:bg-blue-800 shadow-lg"><i class="fas fa-paper-plane text-xs"></i></button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- VIEW: AUDIT CONTROL -->
+            <div x-show="currentTab === 'audit'" style="display: none;" x-transition x-data="{ 
+                auditData: { discrepancies: [], compliance_risks: [], summary: {} },
+                isLoading: false,
+                async refreshAudit() {
+                    this.isLoading = true;
+                    try {
+                        const res = await fetch('/api/audit/report');
+                        this.auditData = await res.json();
+                    } catch(e) { console.error(e); }
+                    finally { this.isLoading = false; }
+                }
+            }" x-init="refreshAudit()">
+                <div class="flex justify-between items-center mb-6">
+                    <h1 class="text-2xl font-semibold text-corp-dark tracking-tight">Systematic Audit Watchdog</h1>
+                    <button @click="refreshAudit()" class="bg-indigo-600 text-white px-4 py-2 rounded text-sm font-semibold hover:bg-indigo-700">
+                        <i class="fas fa-sync-alt mr-2" :class="isLoading ? 'fa-spin' : ''"></i> Scan for Anomalies
+                    </button>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <!-- Discrepancies Column -->
+                    <div class="space-y-4">
+                        <h3 class="flex items-center gap-2 text-sm font-bold text-red-600 uppercase tracking-wider">
+                            <i class="fas fa-exclamation-triangle"></i> Data Discrepancies
+                        </h3>
+                        <template x-for="item in auditData.discrepancies">
+                            <div class="bg-white border-l-4 border-red-500 p-4 rounded shadow-sm flex flex-col gap-1">
+                                <div class="flex justify-between">
+                                    <span class="font-bold text-sm text-gray-800" x-text="item.invoice_no"></span>
+                                    <span class="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-bold uppercase" x-text="item.type"></span>
+                                </div>
+                                <p class="text-xs text-gray-600 leading-relaxed mt-1" x-text="item.details"></p>
+                                <div class="mt-2 flex gap-1">
+                                    <template x-for="src in item.involved_sources">
+                                        <span class="text-[9px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded border border-gray-200 uppercase" x-text="src"></span>
+                                    </template>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+
+                    <!-- Compliance Risks Column -->
+                    <div class="space-y-4">
+                        <h3 class="flex items-center gap-2 text-sm font-bold text-amber-600 uppercase tracking-wider">
+                            <i class="fas fa-shield-virus"></i> Compliance & Risks
+                        </h3>
+                        <template x-for="item in auditData.compliance_risks">
+                            <div class="bg-white border-l-4 border-amber-500 p-4 rounded shadow-sm flex flex-col gap-1">
+                                <div class="flex justify-between">
+                                    <span class="font-bold text-sm text-gray-800" x-text="item.invoice_no"></span>
+                                    <span class="text-[10px] font-bold uppercase" :class="item.severity === 'Critical' ? 'text-red-600' : 'text-amber-600'" x-text="item.severity"></span>
+                                </div>
+                                <p class="text-xs font-semibold text-gray-700" x-text="item.type"></p>
+                                <p class="text-xs text-gray-600 leading-relaxed" x-text="item.details"></p>
+                                <div class="mt-2 text-[10px] text-indigo-600 font-bold"><i class="fas fa-map-marker-alt"></i> <span x-text="item.location"></span></div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+
+            <!-- VIEW: TRADE MAP -->
+            <div x-show="currentTab === 'map'" style="display: none;" class="h-full flex flex-col" x-transition x-init="initMap()">
+                <div class="bg-white border border-corp-border rounded enterprise-shadow flex-1 flex flex-col overflow-hidden">
+                    <div class="p-4 border-b border-corp-border flex justify-between items-center bg-gray-50">
+                        <div>
+                            <h2 class="text-sm font-bold text-corp-dark">Global Supply Chain Visualization</h2>
+                            <p class="text-[10px] text-gray-500">Live routes visualization for Laptops, Crude Oil, Semiconductors, Yarn, and Spices.</p>
+                        </div>
+                        <div class="flex gap-4">
+                            <div class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-emerald-500"></span> <span class="text-[10px] font-bold">Export</span></div>
+                            <div class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-amber-500"></span> <span class="text-[10px] font-bold">Import</span></div>
+                            <div class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-blue-500"></span> <span class="text-[10px] font-bold">Domestic</span></div>
+                        </div>
+                    </div>
+                    <div id="tradeMap" class="flex-1 z-0"></div>
+                </div>
+            </div>
+
+            <!-- VIEW: SYSTEM ARCHITECTURE -->
+            <div x-show="currentTab === 'architecture'" style="display: none;" x-transition>
+                <div class="bg-white border border-corp-border rounded enterprise-shadow p-6 mb-6">
+                    <h2 class="text-lg font-semibold text-corp-dark mb-4 border-b border-corp-border pb-2">System Architecture Diagram</h2>
+                    <p class="text-sm text-corp-gray mb-6">This displays the complete data ingestion and processing flow underlying the platform.</p>
+                    
+                    <div class="flex justify-center bg-gray-50 border border-gray-200 rounded p-6">
+                        <div class="mermaid">
+                        graph TD
+                            subgraph Data Sources
+                                E[Email Inbox]
+                                P[PDF Contracts & Invoices]
+                                X[Excel/Spreadsheets]
+                                R[ERP (SAP/Oracle)]
+                                A[Customs Portals API]
+                            end
+
+                            subgraph Processing Layer (Data Integration)
+                                ETL[ETL Pipeline Engine]
+                                OCR[OCR & Document Parsing]
+                                NLP[NLP Entity Extraction]
+                                MDM[Master Data Mgmt & Resolution]
+                                
+                                E --> OCR
+                                P --> OCR
+                                OCR --> NLP
+                                X --> ETL
+                                R --> ETL
+                                A --> ETL
+                                
+                                NLP --> MDM
+                                ETL --> MDM
+                            end
+
+                            subgraph Storage Layer
+                                DB[(PostgreSQL Data Lake)]
+                                VDB[(Vector DB - Chroma)]
+                                
+                                MDM --> DB
+                                MDM --> VDB
+                            end
+
+                            subgraph Application Layer
+                                DA[Analytics Dashboards]
+                                AI[AI Query Assistant RAG]
+                                RP[Corporate Reporting]
+                                
+                                DB --> DA
+                                DB --> RP
+                                VDB --> AI
+                                DB --> AI
+                            end
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+    <!-- Chart Configuration Script -->
+    <script>
+        document.addEventListener('alpine:initialized', () => {
+            // Wait brief moment for Alpine to render before chart init
+            setTimeout(async () => {
+                const actCtx = document.getElementById('activityChart');
+                if(actCtx) {
+                    new Chart(actCtx.getContext('2d'), {
+                        type: 'bar',
+                        data: {
+                            labels: ['Nov', 'Dec', 'Jan', 'Feb', 'Mar', 'Apr (Proj)'],
+                            datasets: [
+                                {
+                                    label: 'Imports (INR x 1 Lakh)',
+                                    data: [12, 15, 11, 18, 22, 16],
+                                    backgroundColor: '#0052cc',
+                                    borderRadius: 2
+                                },
+                                {
+                                    label: 'Exports (INR x 1 Lakh)',
+                                    data: [9, 11, 9.5, 13, 17.5, 22.5],
+                                    backgroundColor: '#00b8d9',
+                                    borderRadius: 2
+                                }
+                            ]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: { legend: { position: 'top', align: 'end', labels: { boxWidth: 10, usePointStyle: true, font: {family: '"IBM Plex Sans"', size: 12} } } },
+                            scales: { 
+                                y: { beginAtZero: true, grid: { color: '#ebecf0' }, border: {display: false} },
+                                x: { grid: { display: false }, border: {display: false} }
+                            }
+                        }
+                    });
+                }
+
+                const prodCtx = document.getElementById('productsChart');
+                if(prodCtx) {
+                    // Access role from Alpine state if possible, or use a global
+                    const currentRole = document.body.__x.$data.userRole || 'super';
+                    const statsResp = await fetch(`/api/analytics/stats?role=${currentRole}`);
+                    const stats = await statsResp.json();
+                    
+                    new Chart(prodCtx.getContext('2d'), {
+                        type: 'doughnut',
+                        data: {
+                            labels: stats.labels,
+                            datasets: [{
+                                data: stats.values,
+                                backgroundColor: ['#0052cc', '#00b8d9', '#6554c0', '#ff991f', '#36b37e'],
+                                borderWidth: 0
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            cutout: '70%',
+                            plugins: { legend: { position: 'right', labels: { boxWidth: 10, usePointStyle: true, font: {family: '"IBM Plex Sans"', size: 11} } } }
+                        }
+                    });
+                }
+                
+                // Truncate mermaid render delay
+                setTimeout(() => { mermaid.init(undefined, document.querySelectorAll('.mermaid')); }, 100);
+            }, 100);
+        });
+
+        let map = null;
+        function initMap() {
+            if(map) return;
+            setTimeout(() => {
+                map = L.map('tradeMap').setView([20, 45], 3);
+                L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+                    attribution: '&copy; OpenStreetMap contributors'
+                }).addTo(map);
+
+                const routes = [
+                    { from: [13.08, 80.27], to: [25.20, 55.27], type: 'export', item: 'Yarn (Chennai -> Dubai)' },
+                    { from: [25.03, 121.56], to: [13.08, 80.27], type: 'import', item: 'Semiconductors (Taiwan -> Chennai)' },
+                    { from: [24.71, 46.67], to: [19.07, 72.87], type: 'import', item: 'Crude Oil (Saudi Arabia -> Mumbai)' },
+                    { from: [12.97, 77.59], to: [13.08, 80.27], type: 'domestic', item: 'Laptops (Bangalore -> Chennai)' },
+                    { from: [9.93, 76.26], to: [40.71, -74.00], type: 'export', item: 'Spices (Kochi -> New York)' }
+                ];
+
+                routes.forEach(route => {
+                    const color = route.type === 'export' ? '#10b981' : (route.type === 'import' ? '#f59e0b' : '#3b82f6');
+                    
+                    // Draw Line
+                    L.polyline([route.from, route.to], {
+                        color: color,
+                        weight: 2,
+                        opacity: 0.6,
+                        dashArray: route.type === 'domestic' ? '5, 5' : null
+                    }).addTo(map).bindPopup(route.item);
+
+                    // Origin Marker
+                    L.circleMarker(route.from, { radius: 4, color: color, fillOpacity: 0.8 }).addTo(map);
+                    // Dest Marker
+                    L.circleMarker(route.to, { radius: 4, color: color, fillOpacity: 0.8 }).addTo(map);
+                });
+            }, 100);
+        }
+    </script>
+</body>
+</html>

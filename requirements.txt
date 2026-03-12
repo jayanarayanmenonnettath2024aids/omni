@@ -1,0 +1,6 @@
+fastapi
+pandas
+pdfplumber
+requests
+thefuzz
+uvicorn

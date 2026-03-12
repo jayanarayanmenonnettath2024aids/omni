@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>B2B Logistics Storefront</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f8fafc; }
+    </style>
+</head>
+<body class="text-slate-800 antialiased">
+
+    <!-- Header -->
+    <header class="bg-indigo-600 text-white shadow-md">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
+            <div class="flex items-center gap-2">
+                <i class="fas fa-shopping-cart text-2xl"></i>
+                <h1 class="text-2xl font-bold tracking-tight">OmniLogix Supply Store</h1>
+            </div>
+            <div class="flex items-center gap-4">
+                <a href="http://127.0.0.1:8000/" target="_blank" class="text-indigo-100 hover:text-white flex items-center gap-1 font-medium text-sm transition-colors border border-indigo-400 px-3 py-1.5 rounded bg-indigo-500 hover:bg-indigo-400">
+                    <i class="fas fa-chart-line"></i> View ERP Dashboard
+                </a>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+        
+        <div class="text-center mb-12">
+            <h2 class="text-3xl font-extrabold text-slate-900 tracking-tight">Place a Wholesale Order</h2>
+            <p class="mt-4 max-w-2xl text-lg text-slate-500 mx-auto">Orders placed here will be instantly routed to the ERP system via REST API integrations and will appear immediately on your operational dashboard.</p>
+        </div>
+
+        <!-- Global Order Config -->
+        <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-200 mb-8 max-w-md mx-auto">
+            <label class="block text-sm font-medium text-slate-700 mb-2">Checkout as Company:</label>
+            <div class="relative">
+                <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <i class="fas fa-building text-slate-400"></i>
+                </div>
+                <input type="text" id="companyName" placeholder="e.g. Acme Corporation" class="pl-10 block w-full border-slate-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm py-2 border px-3" value="TANCAM Innovations Ltd">
+            </div>
+            <p class="text-xs text-slate-500 mt-2">All orders below will be generated under this customer profile.</p>
+        </div>
+
+        <div id="toast" class="fixed top-5 right-5 bg-green-500 text-white px-6 py-3 rounded shadow-lg transform transition-all duration-300 translate-x-full opacity-0 z-50 flex items-center gap-3">
+            <i class="fas fa-check-circle"></i>
+            <div>
+                <p class="font-bold text-sm">Order Placed Successfully!</p>
+                <p class="text-xs opacity-90" id="toastMsg">Check the ERP Dashboard.</p>
+            </div>
+        </div>
+
+        <!-- Products Grid -->
+        <div class="grid grid-cols-1 gap-y-10 sm:grid-cols-2 gap-x-6 lg:grid-cols-5 xl:gap-x-8">
+            
+            <!-- Product 1 -->
+            <div class="group relative flex flex-col bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden hover:shadow-lg transition-shadow">
+                <div class="w-full aspect-w-1 aspect-h-1 bg-slate-100 flex items-center justify-center py-10 text-indigo-300 bg-gradient-to-br from-slate-50 to-slate-100">
+                    <i class="fas fa-bottle-water text-6xl"></i>
+                </div>
+                <div class="p-5 flex-1 flex flex-col justify-between">
+                    <div>
+                        <h3 class="text-sm text-slate-700 font-bold mb-1">
+                            HydroFlask Pro (100 Pack)
+                        </h3>
+                        <p class="text-xs text-slate-500 mb-4 border-b border-slate-100 pb-2">Stainless steel, double-walled. Corporate gifting.</p>
+                    </div>
+                    <div class="flex items-center justify-between mt-auto">
+                        <p class="text-lg font-bold text-slate-900">$1,500</p>
+                        <button onclick="placeOrder('HydroFlask Pro (100 Pack)', 1, 1500)" class="bg-indigo-50 text-indigo-700 text-xs font-bold px-3 py-2 rounded border border-indigo-200 hover:bg-indigo-600 hover:text-white transition-colors">
+                            Buy Now
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Product 2 -->
+            <div class="group relative flex flex-col bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden hover:shadow-lg transition-shadow">
+                <div class="w-full aspect-w-1 aspect-h-1 bg-slate-100 flex items-center justify-center py-10 text-emerald-300 bg-gradient-to-br from-slate-50 to-slate-100">
+                    <i class="fas fa-chair text-6xl"></i>
+                </div>
+                <div class="p-5 flex-1 flex flex-col justify-between">
+                    <div>
+                        <h3 class="text-sm text-slate-700 font-bold mb-1">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Product 4 -->
+            <div class="group relative flex flex-col bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden hover:shadow-lg transition-shadow">
+                <div class="w-full aspect-w-1 aspect-h-1 bg-slate-100 flex items-center justify-center py-10 text-amber-300 bg-gradient-to-br from-slate-50 to-slate-100">
+                    <i class="fas fa-tshirt text-6xl"></i>
+                </div>
+                <div class="p-5 flex-1 flex flex-col justify-between">
+                    <div>
+                        <h3 class="text-sm text-slate-700 font-bold mb-1">
+                            TerraCotton T-Shirts
+                        </h3>
+                        <p class="text-xs text-slate-500 mb-4 border-b border-slate-100 pb-2">Organic cotton, bulk 100-pack for events.</p>
+                    </div>
+                    <div class="flex items-center justify-between mt-auto">
+                        <p class="text-lg font-bold text-slate-900">$800</p>
+                        <button onclick="placeOrder('TerraCotton T-Shirts (100 Pack)', 1, 800)" class="bg-indigo-50 text-indigo-700 text-xs font-bold px-3 py-2 rounded border border-indigo-200 hover:bg-indigo-600 hover:text-white transition-colors">
+                            Buy Now
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Product 5 -->
+            <div class="group relative flex flex-col bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden hover:shadow-lg transition-shadow">
+                <div class="w-full aspect-w-1 aspect-h-1 bg-slate-100 flex items-center justify-center py-10 text-purple-300 bg-gradient-to-br from-slate-50 to-slate-100">
+                    <i class="fas fa-mat text-6xl"></i>
+                    <i class="fas fa-spa text-6xl text-purple-300"></i>
+                </div>
+                <div class="p-5 flex-1 flex flex-col justify-between">
+                    <div>
+                        <h3 class="text-sm text-slate-700 font-bold mb-1">
+                            ZenMaster Yoga Mat
+                        </h3>
+                        <p class="text-xs text-slate-500 mb-4 border-b border-slate-100 pb-2">Premium non-slip, bulk 50-pack.</p>
+                    </div>
+                    <div class="flex items-center justify-between mt-auto">
+                        <p class="text-lg font-bold text-slate-900">$1,000</p>
+                        <button onclick="placeOrder('ZenMaster Yoga Mat (50 Pack)', 1, 1000)" class="bg-indigo-50 text-indigo-700 text-xs font-bold px-3 py-2 rounded border border-indigo-200 hover:bg-indigo-600 hover:text-white transition-colors">
+                            Buy Now
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </main>
+
+    <script>
+        async function placeOrder(itemName, quantity, rate) {
+            const companyName = document.getElementById('companyName').value || "Guest Company";
+            const qty = parseInt(quantity, 10);
+            
+            const payload = {
+                client_name: companyName,
+                item: itemName,
+                qty: qty,
+                rate: parseFloat(rate)
+            };
+
+            try {
+                const response = await fetch('/api/order', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                if(response.ok) {
+                    const data = await response.json();
+                    showToast(`Invoice ${data.invoice_no} generated!`);
+                } else {
+                    alert("Error placing order.");
+                }
+            } catch (err) {
+                console.error(err);
+                alert("Server error.");
+            }
+        }
+
+        function showToast(msg) {
+            const toast = document.getElementById('toast');
+            document.getElementById('toastMsg').innerText = msg;
+            
+            toast.classList.remove('translate-x-full', 'opacity-0');
+            
+            setTimeout(() => {
+                toast.classList.add('translate-x-full', 'opacity-0');
+            }, 3000);
+        }
+    </script>
+</body>
+</html>

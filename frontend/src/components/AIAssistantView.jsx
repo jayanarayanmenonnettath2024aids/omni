@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Mic, MicOff, Volume2, User, Bot, Loader2, ArrowRight } from 'lucide-react';
+import { Room, RoomEvent, Track } from 'livekit-client';
 
 const LANGUAGE_OPTIONS = [
   { code: 'en-IN', label: 'English' },
@@ -69,9 +70,17 @@ const AIAssistantView = () => {
   const [selectedLang, setSelectedLang] = useState('en-IN');
   const [continuousVoice, setContinuousVoice] = useState(false);
   const [voiceError, setVoiceError] = useState('');
+  const [liveAgentState, setLiveAgentState] = useState({
+    status: 'idle',
+    roomName: '',
+    message: '',
+  });
   const scrollRef = useRef(null);
   const recognitionRef = useRef(null);
   const audioRef = useRef(null);
+  const liveRoomRef = useRef(null);
+  const liveAgentStateRef = useRef({ roomName: '' });
+  const remoteAudioContainerRef = useRef(null);
   const messagesRef = useRef(messages);
   const selectedLangRef = useRef(selectedLang);
   const continuousVoiceRef = useRef(continuousVoice);
@@ -112,6 +121,10 @@ const AIAssistantView = () => {
   }, [isLoading]);
 
   useEffect(() => {
+    liveAgentStateRef.current = liveAgentState;
+  }, [liveAgentState]);
+
+  useEffect(() => {
     const RecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
     setSpeechSupported(Boolean(RecognitionCtor));
 
@@ -130,8 +143,113 @@ const AIAssistantView = () => {
         audioRef.current.pause();
         audioRef.current = null;
       }
+      if (liveRoomRef.current) {
+        try {
+          liveRoomRef.current.disconnect();
+        } catch (_e) {
+          // no-op
+        }
+      }
     };
   }, []);
+
+  const attachRemoteAudio = (track, participantName) => {
+    if (track.kind !== Track.Kind.Audio || !remoteAudioContainerRef.current) return;
+    const element = track.attach();
+    element.autoplay = true;
+    element.dataset.participant = participantName || 'remote-agent';
+    remoteAudioContainerRef.current.appendChild(element);
+  };
+
+  const detachRemoteAudio = (track) => {
+    track.detach().forEach((element) => element.remove());
+  };
+
+  const endLiveVoiceAgent = async () => {
+    const activeRoomName = liveAgentStateRef.current.roomName;
+    setLiveAgentState((prev) => ({ ...prev, status: 'ending', message: 'Ending live voice session...' }));
+
+    try {
+      if (liveRoomRef.current) {
+        liveRoomRef.current.disconnect();
+        liveRoomRef.current = null;
+      }
+
+      if (activeRoomName) {
+        await fetch('/api/voice-agent/session/end', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ room_name: activeRoomName }),
+        });
+      }
+
+      setLiveAgentState({ status: 'idle', roomName: '', message: 'Live voice session ended.' });
+    } catch (error) {
+      setLiveAgentState({ status: 'error', roomName: activeRoomName || '', message: error?.message || 'Unable to end live voice session.' });
+    }
+  };
+
+  const startLiveVoiceAgent = async () => {
+    if (liveAgentState.status === 'starting' || liveAgentState.status === 'connected') {
+      return;
+    }
+
+    setLiveAgentState({ status: 'starting', roomName: '', message: 'Starting live voice agent...' });
+
+    try {
+      const response = await fetch('/api/voice-agent/session/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload?.detail || 'Unable to start live voice session.');
+      }
+
+      const roomUrl = payload.url || payload.wsUrl || payload.roomUrl;
+      const token = payload.userToken || payload.token;
+      const roomName = payload.roomName || payload.room_name || '';
+
+      if (!roomUrl || !token) {
+        throw new Error('Voice agent response is missing room URL or token.');
+      }
+
+      const room = new Room();
+      room
+        .on(RoomEvent.TrackSubscribed, (track, _publication, participant) => {
+          attachRemoteAudio(track, participant?.identity);
+        })
+        .on(RoomEvent.TrackUnsubscribed, (track) => {
+          detachRemoteAudio(track);
+        })
+        .on(RoomEvent.Disconnected, () => {
+          liveRoomRef.current = null;
+          setLiveAgentState((prev) => ({ ...prev, status: 'idle', message: prev.message || 'Live voice session disconnected.' }));
+        });
+
+      await room.connect(roomUrl, token);
+      await room.localParticipant.setMicrophoneEnabled(true);
+      liveRoomRef.current = room;
+
+      setLiveAgentState({
+        status: 'connected',
+        roomName,
+        message: roomName ? `Connected to room ${roomName}` : 'Connected to live voice agent.',
+      });
+    } catch (error) {
+      if (liveRoomRef.current) {
+        try {
+          liveRoomRef.current.disconnect();
+        } catch (_e) {
+          // no-op
+        }
+        liveRoomRef.current = null;
+      }
+      setLiveAgentState({ status: 'error', roomName: '', message: error?.message || 'Unable to connect to live voice agent.' });
+    }
+  };
 
   const stopRecognition = () => {
     if (!recognitionRef.current) return;
@@ -382,6 +500,41 @@ const AIAssistantView = () => {
           <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">Mic Mode</div>
           <div className="text-sm font-bold text-slate-700">{continuousVoice ? 'Continuous until you switch off mic' : 'Single-turn voice capture'}</div>
         </div>
+      </div>
+
+      <div className="mb-4 rounded-2xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">Live Voice Agent</div>
+            <div className="text-sm font-bold text-slate-700">Separate LiveKit-backed voice session via backend-proxied Lyzr API.</div>
+            <div className="mt-1 text-xs font-semibold text-slate-500">{liveAgentState.message || 'Use this for a parallel live voice room, independent of the built-in assistant voice mode.'}</div>
+          </div>
+          <div className="flex items-center gap-3">
+            <div className={`px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border ${liveAgentState.status === 'connected' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : liveAgentState.status === 'error' ? 'bg-red-50 text-red-700 border-red-200' : 'bg-slate-50 text-slate-500 border-slate-200'}`}>
+              {liveAgentState.status}
+            </div>
+            {liveAgentState.status === 'connected' ? (
+              <button
+                onClick={endLiveVoiceAgent}
+                className="px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest bg-red-600 text-white hover:bg-red-700 transition-all"
+              >
+                End Live Session
+              </button>
+            ) : (
+              <button
+                onClick={startLiveVoiceAgent}
+                disabled={liveAgentState.status === 'starting'}
+                className="px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest bg-slate-900 text-white hover:bg-slate-800 transition-all disabled:opacity-60"
+              >
+                {liveAgentState.status === 'starting' ? 'Starting...' : 'Start Live Session'}
+              </button>
+            )}
+          </div>
+        </div>
+        {liveAgentState.roomName && (
+          <div className="mt-3 text-[10px] font-black uppercase tracking-widest text-slate-400">Room: {liveAgentState.roomName}</div>
+        )}
+        <div ref={remoteAudioContainerRef} className="hidden" />
       </div>
 
       {voiceError && (

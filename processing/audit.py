@@ -64,13 +64,23 @@ def run_audit(unified_data: List[Dict]) -> Dict:
                 "location": "Kochi/Chennai"
             })
 
+    delay_items = [
+        item for item in (compliance_risks + anomalies)
+        if "lag" in str(item.get("type", "")).lower() or "delay" in str(item.get("type", "")).lower()
+    ]
+
     return {
         "discrepancies": discrepancies,
         "compliance_risks": compliance_risks,
         "anomalies": anomalies,
+        "delays": delay_items,
         "summary": {
+            "scanned_records": len(unified_data),
+            "discrepancy_count": len(discrepancies),
+            "compliance_count": len(compliance_risks),
             "total_issues": len(discrepancies) + len(compliance_risks) + len(anomalies),
             "critical_count": len([i for i in compliance_risks if i["severity"] == "Critical"]),
             "anomaly_count": len(anomalies),
+            "delay_count": len(delay_items),
         }
     }

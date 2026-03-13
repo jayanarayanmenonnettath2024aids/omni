@@ -82,6 +82,14 @@ class RegisterRequest(BaseModel):
     display_name: str
     role: str = "domestic"
 
+
+class VoiceSessionStartRequest(BaseModel):
+    agent_id: Optional[str] = None
+
+
+class VoiceSessionEndRequest(BaseModel):
+    room_name: str
+
 # In-memory mock database
 MOCK_TRANSACTIONS = [
     {"invoice_no": "LOG-INV-2026-004", "client_name": "Metro Retailers", "gst_id": "33METRO1234F1Z1", "item": "Laptops - 50 Units", "category": "Electronics", "hs_code": "8471", "qty": 50, "rate": 45000, "date": "2026-03-31", "trade_type": "DOMESTIC", "origin": "Bangalore", "destination": "Chennai", "port": None, "customs_duty": None},
@@ -232,6 +240,79 @@ def api_register(req: RegisterRequest):
     user = result["user"]
     return {"status": "success", **user}
 
+
+@app.post("/api/voice-agent/session/start")
+async def start_voice_agent_session(req: VoiceSessionStartRequest):
+    api_key = os.getenv("LYZR_VOICE_API_KEY", "").strip()
+    agent_id = (req.agent_id or os.getenv("LYZR_VOICE_AGENT_ID", "")).strip()
+    base_url = os.getenv("LYZR_VOICE_BASE_URL", "https://voice-livekit.studio.lyzr.ai").rstrip("/")
+
+    if not api_key:
+        raise HTTPException(status_code=500, detail="LYZR_VOICE_API_KEY not configured")
+    if not agent_id:
+        raise HTTPException(status_code=500, detail="LYZR_VOICE_AGENT_ID not configured")
+
+    headers = {
+        "Content-Type": "application/json",
+        "x-api-key": api_key,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{base_url}/v1/session/start",
+                json={"agentId": agent_id},
+                headers=headers,
+            )
+        if response.status_code >= 400:
+            raise HTTPException(status_code=response.status_code, detail=response.text)
+        payload = response.json()
+        return {
+            "status": "success",
+            "provider": "lyzr-livekit",
+            **payload,
+        }
+    except HTTPException:
+        raise
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Voice agent start request timed out")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Unable to start voice agent session: {exc}")
+
+
+@app.post("/api/voice-agent/session/end")
+async def end_voice_agent_session(req: VoiceSessionEndRequest):
+    api_key = os.getenv("LYZR_VOICE_API_KEY", "").strip()
+    base_url = os.getenv("LYZR_VOICE_BASE_URL", "https://voice-livekit.studio.lyzr.ai").rstrip("/")
+
+    if not api_key:
+        raise HTTPException(status_code=500, detail="LYZR_VOICE_API_KEY not configured")
+    if not req.room_name.strip():
+        raise HTTPException(status_code=400, detail="room_name is required")
+
+    headers = {
+        "Content-Type": "application/json",
+        "x-api-key": api_key,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{base_url}/v1/session/end",
+                json={"roomName": req.room_name.strip()},
+                headers=headers,
+            )
+        if response.status_code >= 400:
+            raise HTTPException(status_code=response.status_code, detail=response.text)
+        payload = response.json() if response.content else {"status": "ended"}
+        return {"status": "success", **payload}
+    except HTTPException:
+        raise
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Voice agent end request timed out")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Unable to end voice agent session: {exc}")
+
 @app.post("/api/ai/chat")
 def ai_chat(query: Dict):
     user_text = query.get("message", "")
@@ -306,6 +387,7 @@ def get_audit():
     })
     
     report = run_audit(formatted_data)
+    report["generated_at"] = datetime.datetime.now().isoformat(timespec="seconds")
     return report
 
 # ─── ElevenLabs Text-to-Speech Endpoint ───────────────────────────────────────

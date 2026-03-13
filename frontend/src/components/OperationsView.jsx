@@ -294,7 +294,9 @@ const OperationsView = ({ view, dashboardData, userRole }) => {
 
   if (view === 'reports') {
     const anomalyCount = Array.isArray(auditReport?.anomalies) ? auditReport.anomalies.length : 0;
-    const delayCount = Array.isArray(auditReport?.delays) ? auditReport.delays.length : 0;
+    const delayCount = Array.isArray(auditReport?.delays)
+      ? auditReport.delays.length
+      : Number(auditReport?.summary?.delay_count || 0);
 
     return (
       <div className="space-y-6">

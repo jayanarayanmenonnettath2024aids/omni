@@ -12,6 +12,7 @@ import AIAssistantView from '../components/AIAssistantView';
 import MasterDataView from '../components/MasterDataView';
 import TradeMapView from '../components/TradeMapView';
 import OperationsView from '../components/OperationsView';
+import AuditControlView from '../components/AuditControlView';
 
 const formatCurrencyCompact = (value) => new Intl.NumberFormat('en-IN', {
   notation: 'compact',
@@ -386,6 +387,8 @@ const Dashboard = () => {
         return <OperationsView view="reports" dashboardData={dashboardData} userRole={userRole} />;
       case 'admin':
         return <OperationsView view="admin" dashboardData={dashboardData} userRole={userRole} />;
+      case 'audit':
+        return <AuditControlView />;
       default:
         return <div className="text-center py-20 text-gray-400 font-bold uppercase tracking-widest">View Under Development</div>;
     }

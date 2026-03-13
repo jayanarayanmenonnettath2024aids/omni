@@ -1,21 +1,44 @@
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
-from typing import List, Dict
+from typing import List, Dict, Optional
 import datetime
 from processing.ai_assistant import get_ai_response
 from processing.audit import run_audit
 from main import run_pipeline
 import sqlite3
 import os
+import httpx
+import glob
+import uuid
+from dotenv import load_dotenv
+from ingestion.excel_ingest import ingest_excel
+from ingestion.pdf_ingest import extract_pdf_text_and_tables
+from ingestion.email_imap_ingest import ingest_unseen_emails
+from processing.transform import transform_excel_record, transform_pdf_record, transform_email_record
+from processing.mdm import apply_mdm
+from processing.database import save_to_data_lake, get_vector_db_stats
+
+# Load environment variables from .env file
+load_dotenv()
 
 app = FastAPI()
+
+DEFAULT_EXCEL_PATH = "data/logistics_shipments.xlsx"
+DEFAULT_PDF_GLOB = "data/*.pdf"
 
 class Order(BaseModel):
     client_name: str
     item: str
     qty: int
     rate: float
+
+
+class IngestRequest(BaseModel):
+    file_path: Optional[str] = None
+    file_glob: Optional[str] = None
+    username: Optional[str] = None
+    app_password: Optional[str] = None
 
 # In-memory mock database
 MOCK_TRANSACTIONS = [
@@ -198,7 +221,25 @@ def get_audit():
             "source": "ERP",
             "trade_type": t["trade_type"],
             "financials": {"total_value": t["qty"] * t["rate"]},
-            "shipment": {"destination_location": t["destination"]}
+            "shipment": {
+                "destination_location": t["destination"],
+                "origin_location": t["origin"],
+                "port": t.get("port")
+            }
+        })
+
+    # Add portal shipment state records to improve anomaly and delay detection.
+    for s in MOCK_SHIPMENTS:
+        formatted_data.append({
+            "invoice_no": s["invoice_no"],
+            "source": "PORTAL",
+            "trade_type": "UNKNOWN",
+            "financials": {"total_value": 0},
+            "shipment": {
+                "port": s.get("port"),
+                "destination_location": s.get("port"),
+                "clearance_status": s.get("clearance_status")
+            }
         })
     # Add a purposely discrepant record from 'PDF'
     formatted_data.append({
@@ -211,6 +252,74 @@ def get_audit():
     
     report = run_audit(formatted_data)
     return report
+
+# ─── ElevenLabs Text-to-Speech Endpoint ───────────────────────────────────────
+class TTSRequest(BaseModel):
+    text: str
+    lang: Optional[str] = "en-IN"
+
+@app.post("/api/tts")
+async def text_to_speech(req: TTSRequest):
+    """
+    Converts text to speech using ElevenLabs API.
+    Returns audio/mpeg stream.
+    """
+    api_key = os.getenv("ELEVENLABS_API_KEY", "")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="ELEVENLABS_API_KEY not configured in .env")
+
+    # Pick voice based on language preference (English/Tamil/Hindi).
+    lang_code = (req.lang or "en-IN").lower()
+    if lang_code.startswith("ta"):
+        voice_id_key = "ELEVENLABS_VOICE_ID_TAMIL"
+        fallback_voice = os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")
+    elif lang_code.startswith("hi"):
+        voice_id_key = "ELEVENLABS_VOICE_ID_HINDI"
+        fallback_voice = os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")
+    else:
+        # Allow a dedicated Indian English voice if configured.
+        voice_id_key = "ELEVENLABS_VOICE_ID_EN_IN"
+        fallback_voice = os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")
+
+    voice_id = os.getenv(voice_id_key, fallback_voice)
+
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+    headers = {
+        "xi-api-key": api_key,
+        "Content-Type": "application/json",
+        "Accept": "audio/mpeg"
+    }
+    payload = {
+        "text": req.text,
+        "model_id": "eleven_multilingual_v2",
+        "voice_settings": {
+            "stability": 0.5,
+            "similarity_boost": 0.75
+        }
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(url, json=payload, headers=headers)
+            if response.status_code != 200:
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=f"ElevenLabs API error: {response.text}"
+                )
+            # Stream the audio back to the browser
+            audio_bytes = response.content
+            return StreamingResponse(
+                iter([audio_bytes]),
+                media_type="audio/mpeg",
+                headers={"Content-Disposition": "inline; filename=response.mp3"}
+            )
+    except HTTPException:
+        # Preserve upstream status/details (e.g., ElevenLabs auth or quota errors).
+        raise
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="ElevenLabs API timeout")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"TTS internal error: {e}")
 
 @app.post("/api/order")
 def create_order(order: Order):
@@ -232,4 +341,94 @@ def create_order(order: Order):
         "customs_duty": None
     }
     MOCK_TRANSACTIONS.append(new_transaction)
-    return {"status": "success", "invoice_no": invoice_no}
+    return {"status": "success", "invoice_no": invoice_no}
+
+
+@app.get("/api/vector/status")
+def vector_status():
+    return get_vector_db_stats()
+
+
+@app.post("/api/ingest/excel")
+def trigger_excel_ingestion(req: IngestRequest = IngestRequest()):
+    path = req.file_path or DEFAULT_EXCEL_PATH
+    rows = ingest_excel(path)
+    transformed = [apply_mdm(transform_excel_record(r)) for r in rows]
+    save_to_data_lake(transformed, reset=False)
+    return {"status": "success", "source": "EXCEL", "file": path, "records": len(transformed)}
+
+
+@app.post("/api/ingest/pdf")
+def trigger_pdf_ingestion(req: IngestRequest = IngestRequest()):
+    pattern = req.file_glob or DEFAULT_PDF_GLOB
+    pdf_files = glob.glob(pattern)
+    transformed = []
+
+    for file_path in pdf_files:
+        text, _tables = extract_pdf_text_and_tables(file_path)
+        invoice_no = f"PDF-{uuid.uuid4().hex[:8]}"
+        amount = 0
+        parsed_amount = [token for token in text.replace(",", " ").split() if token.isdigit()]
+        if parsed_amount:
+            try:
+                amount = float(parsed_amount[-1])
+            except Exception:
+                amount = 0
+
+        payload = {
+            "invoice_no": invoice_no,
+            "client_name": "Document Client",
+            "amount": amount,
+            "date": datetime.date.today().strftime("%Y-%m-%d"),
+            "item": "Document Shipment",
+        }
+        transformed.append(apply_mdm(transform_pdf_record(payload)))
+
+    if transformed:
+        save_to_data_lake(transformed, reset=False)
+
+    return {"status": "success", "source": "PDF", "files": len(pdf_files), "records": len(transformed)}
+
+
+@app.post("/api/ingest/email")
+def trigger_email_ingestion(req: IngestRequest = IngestRequest()):
+    username = req.username or os.getenv("EMAIL_USERNAME", "")
+    app_password = req.app_password or os.getenv("EMAIL_APP_PASSWORD", "")
+    if not username or not app_password:
+        return {
+            "status": "error",
+            "source": "EMAIL",
+            "message": "Missing EMAIL_USERNAME or EMAIL_APP_PASSWORD in .env (or request body).",
+            "records": 0,
+        }
+
+    try:
+        emails = ingest_unseen_emails(username, app_password)
+    except Exception as e:
+        return {
+            "status": "error",
+            "source": "EMAIL",
+            "message": f"IMAP ingestion failed: {e}",
+            "records": 0,
+        }
+
+    transformed = [apply_mdm(transform_email_record(e)) for e in emails]
+    if transformed:
+        save_to_data_lake(transformed, reset=False)
+    return {"status": "success", "source": "EMAIL", "records": len(transformed)}
+
+
+@app.post("/api/ingest/all")
+def trigger_all_ingestion(req: IngestRequest = IngestRequest()):
+    excel_result = trigger_excel_ingestion(req)
+    pdf_result = trigger_pdf_ingestion(req)
+    email_result = trigger_email_ingestion(req)
+    return {
+        "status": "success",
+        "summary": {
+            "excel_records": excel_result.get("records", 0),
+            "pdf_records": pdf_result.get("records", 0),
+            "email_records": email_result.get("records", 0),
+            "total_records": excel_result.get("records", 0) + pdf_result.get("records", 0) + email_result.get("records", 0),
+        },
+    }

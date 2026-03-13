@@ -1,5 +1,6 @@
 from typing import List, Dict
 import json
+from processing.anomaly_engine import detect_anomalies
 
 def run_audit(unified_data: List[Dict]) -> Dict:
     """
@@ -7,6 +8,7 @@ def run_audit(unified_data: List[Dict]) -> Dict:
     """
     discrepancies = []
     compliance_risks = []
+    anomalies = detect_anomalies(unified_data)
     
     # Group by Invoice to compare across sources
     grouped_by_invoice = {}
@@ -65,8 +67,10 @@ def run_audit(unified_data: List[Dict]) -> Dict:
     return {
         "discrepancies": discrepancies,
         "compliance_risks": compliance_risks,
+        "anomalies": anomalies,
         "summary": {
-            "total_issues": len(discrepancies) + len(compliance_risks),
-            "critical_count": len([i for i in compliance_risks if i["severity"] == "Critical"])
+            "total_issues": len(discrepancies) + len(compliance_risks) + len(anomalies),
+            "critical_count": len([i for i in compliance_risks if i["severity"] == "Critical"]),
+            "anomaly_count": len(anomalies),
         }
     }

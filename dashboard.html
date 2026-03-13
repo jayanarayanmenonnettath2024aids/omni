@@ -475,9 +475,36 @@
                 messages: [
                     { role: 'ai', content: 'Hello! I am your Trade Intelligence Assistant. You can **speak** or type to me. I support English and Tamil.' }
                 ],
+                suggestedPrompts: ['trade data this month', 'how many shipments left', 'show pending imports', 'top anomaly alerts'],
                 isLoading: false,
                 isRecording: false,
                 currentLang: 'en-IN',
+                voiceEnabled: false,
+                langOptions: [
+                    { code: 'en-IN', label: 'EN' },
+                    { code: 'ta-IN', label: 'தமிழ்' },
+                    { code: 'hi-IN', label: 'हिंदी' }
+                ],
+                ttsMode: 'auto',
+                preferredVoiceProfile: 'indian',
+                findPreferredVoice() {
+                    const voices = window.speechSynthesis ? window.speechSynthesis.getVoices() : [];
+                    if (!voices || !voices.length) return null;
+
+                    const langPrefix = (this.currentLang || 'en-IN').split('-')[0].toLowerCase();
+                    const sameLang = voices.filter(v => (v.lang || '').toLowerCase().startsWith(langPrefix));
+                    const pool = sameLang.length ? sameLang : voices;
+
+                    if (this.preferredVoiceProfile === 'indian') {
+                        const indian = pool.find(v => {
+                            const s = `${v.name} ${v.lang}`.toLowerCase();
+                            return s.includes('india') || s.includes('indian') || s.includes('hindi') || s.includes('tamil');
+                        });
+                        if (indian) return indian;
+                    }
+
+                    return pool[0] || null;
+                },
                 async sendQuery() {
                     if (!this.query.trim()) return;
                     const userMsg = this.query;
@@ -493,21 +520,38 @@
                         });
                         const data = await response.json();
                         this.messages.push({ role: 'ai', content: data.answer });
-                        
-                        // Text-to-Speech Response (Native Priority)
-                        window.speechSynthesis.cancel();
-                        const cleanText = data.answer.replace(/<br>/g, ' ').replace(/[#*]/g, '');
-                        const speech = new SpeechSynthesisUtterance(cleanText);
-                        
-                        if (/[\u0B80-\u0BFF]/.test(cleanText)) {
-                            speech.lang = 'ta-IN';
-                            speech.pitch = 1;
-                            speech.rate = 0.9; // Slightly slower for clarity
-                        } else {
-                            speech.lang = 'en-IN';
+
+                        if (!this.voiceEnabled) {
+                            this.ttsMode = 'off';
+                            return;
                         }
                         
-                        window.speechSynthesis.speak(speech);
+                        // Text-to-Speech via ElevenLabs (backend /api/tts)
+                        const cleanText = data.answer.replace(/<br>/g, ' ').replace(/[#*]/g, '').trim();
+                        try {
+                            const ttsRes = await fetch('/api/tts', {
+                                method: 'POST',
+                                headers: {'Content-Type': 'application/json'},
+                                body: JSON.stringify({ text: cleanText, lang: this.currentLang })
+                            });
+                            if (ttsRes.ok) {
+                                const blob = await ttsRes.blob();
+                                const audioUrl = URL.createObjectURL(blob);
+                                const audio = new Audio(audioUrl);
+                                await audio.play();
+                                this.ttsMode = 'elevenlabs';
+                                // Clean up object URL after playback
+                                audio.onended = () => URL.revokeObjectURL(audioUrl);
+                            } else {
+                                const errText = await ttsRes.text();
+                                console.warn('ElevenLabs TTS failed:', ttsRes.status, errText);
+                                this.ttsMode = 'error';
+                            }
+                        } catch (ttsErr) {
+                            // TTS failure is non-fatal — chat still works
+                            console.warn('ElevenLabs TTS error:', ttsErr);
+                            this.ttsMode = 'error';
+                        }
                     } catch (e) {
                         this.messages.push({ role: 'ai', content: 'System Error: Connect to backend for real-time analysis.' });
                     } finally {
@@ -540,20 +584,32 @@
                             <span class="font-semibold text-corp-dark">Trade Intelligence Assistant</span>
                         </div>
                         <div class="flex items-center gap-2">
+                             <button @click="voiceEnabled = !voiceEnabled; if (!voiceEnabled) { window.speechSynthesis.cancel(); ttsMode = 'off'; }"
+                                 class="text-[10px] font-bold uppercase px-2 py-0.5 rounded border"
+                                 :class="voiceEnabled ? 'text-emerald-700 bg-emerald-50 border-emerald-200' : 'text-gray-500 bg-gray-50 border-gray-200'"
+                                 x-text="voiceEnabled ? 'Voice: ON' : 'Voice: OFF'"></button>
+                             <span class="text-[10px] font-bold uppercase px-2 py-0.5 rounded border"
+                                 :class="ttsMode === 'elevenlabs' ? 'text-emerald-700 bg-emerald-50 border-emerald-200' : (ttsMode === 'error' ? 'text-red-700 bg-red-50 border-red-200' : 'text-gray-500 bg-gray-50 border-gray-200')"
+                                 x-text="ttsMode === 'elevenlabs' ? 'Engine: ElevenLabs' : (ttsMode === 'error' ? 'Engine: ElevenLabs Error' : 'Engine: Idle')"></span>
                              <span class="text-[10px] font-bold text-gray-400 uppercase">Input Language:</span>
                              <div class="flex bg-gray-200 p-0.5 rounded text-[10px] font-bold">
-                                 <button @click="currentLang = 'en-IN'" 
-                                         class="px-2 py-0.5 rounded transition-all"
-                                         :class="currentLang === 'en-IN' ? 'bg-white text-corp-blue shadow-sm' : 'text-gray-500'">EN</button>
-                                 <button @click="currentLang = 'ta-IN'" 
-                                         class="px-2 py-0.5 rounded transition-all"
-                                         :class="currentLang === 'ta-IN' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-500'">தமிழ்</button>
+                                 <template x-for="opt in langOptions" :key="opt.code">
+                                     <button @click="currentLang = opt.code" 
+                                             class="px-2 py-0.5 rounded transition-all"
+                                             :class="currentLang === opt.code ? 'bg-white text-corp-blue shadow-sm' : 'text-gray-500'"
+                                             x-text="opt.label"></button>
+                                 </template>
                              </div>
                         </div>
                     </div>
                     
                     <!-- Chat Area -->
                     <div class="flex-1 overflow-y-auto p-6 space-y-6 bg-white">
+                        <div class="flex flex-wrap gap-2">
+                            <template x-for="prompt in suggestedPrompts">
+                                <button @click="query = prompt; sendQuery()" class="text-xs px-3 py-1.5 rounded-full border border-blue-200 text-blue-700 bg-blue-50 hover:bg-blue-100 transition-colors" x-text="prompt"></button>
+                            </template>
+                        </div>
                         <template x-for="msg in messages">
                             <div class="flex gap-4" :class="msg.role === 'user' ? 'flex-row-reverse' : ''">
                                 <div class="w-8 h-8 rounded flex items-center justify-center flex-shrink-0 mt-1" :class="msg.role === 'ai' ? 'bg-blue-100' : 'bg-corp-navy text-white text-xs font-bold border border-corp-border'">
@@ -591,7 +647,7 @@
 
             <!-- VIEW: AUDIT CONTROL -->
             <div x-show="currentTab === 'audit'" style="display: none;" x-transition x-data="{ 
-                auditData: { discrepancies: [], compliance_risks: [], summary: {} },
+                auditData: { discrepancies: [], compliance_risks: [], anomalies: [], summary: {} },
                 isLoading: false,
                 async refreshAudit() {
                     this.isLoading = true;
@@ -609,7 +665,22 @@
                     </button>
                 </div>
 
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                    <div class="bg-white border border-corp-border rounded enterprise-shadow p-4">
+                        <div class="text-[10px] uppercase text-gray-500 font-bold tracking-wider">Total Issues</div>
+                        <div class="text-2xl font-semibold text-corp-dark mt-1" x-text="auditData.summary.total_issues || 0"></div>
+                    </div>
+                    <div class="bg-white border border-corp-border rounded enterprise-shadow p-4">
+                        <div class="text-[10px] uppercase text-red-600 font-bold tracking-wider">Critical Risks</div>
+                        <div class="text-2xl font-semibold text-corp-dark mt-1" x-text="auditData.summary.critical_count || 0"></div>
+                    </div>
+                    <div class="bg-white border border-corp-border rounded enterprise-shadow p-4">
+                        <div class="text-[10px] uppercase text-indigo-600 font-bold tracking-wider">Anomaly Signals</div>
+                        <div class="text-2xl font-semibold text-corp-dark mt-1" x-text="auditData.summary.anomaly_count || 0"></div>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
                     <!-- Discrepancies Column -->
                     <div class="space-y-4">
                         <h3 class="flex items-center gap-2 text-sm font-bold text-red-600 uppercase tracking-wider">
@@ -641,6 +712,24 @@
                                 <div class="flex justify-between">
                                     <span class="font-bold text-sm text-gray-800" x-text="item.invoice_no"></span>
                                     <span class="text-[10px] font-bold uppercase" :class="item.severity === 'Critical' ? 'text-red-600' : 'text-amber-600'" x-text="item.severity"></span>
+                                </div>
+                                <p class="text-xs font-semibold text-gray-700" x-text="item.type"></p>
+                                <p class="text-xs text-gray-600 leading-relaxed" x-text="item.details"></p>
+                                <div class="mt-2 text-[10px] text-indigo-600 font-bold"><i class="fas fa-map-marker-alt"></i> <span x-text="item.location"></span></div>
+                            </div>
+                        </template>
+                    </div>
+
+                    <!-- Anomalies Column -->
+                    <div class="space-y-4">
+                        <h3 class="flex items-center gap-2 text-sm font-bold text-indigo-600 uppercase tracking-wider">
+                            <i class="fas fa-wave-square"></i> Anomaly Signals
+                        </h3>
+                        <template x-for="item in auditData.anomalies">
+                            <div class="bg-white border-l-4 border-indigo-500 p-4 rounded shadow-sm flex flex-col gap-1">
+                                <div class="flex justify-between">
+                                    <span class="font-bold text-sm text-gray-800" x-text="item.invoice_no"></span>
+                                    <span class="text-[10px] font-bold uppercase" :class="item.severity === 'High' ? 'text-red-600' : 'text-indigo-600'" x-text="item.severity"></span>
                                 </div>
                                 <p class="text-xs font-semibold text-gray-700" x-text="item.type"></p>
                                 <p class="text-xs text-gray-600 leading-relaxed" x-text="item.details"></p>

@@ -4,3 +4,5 @@ pdfplumber
 requests
 thefuzz
 uvicorn
+python-dotenv
+httpx

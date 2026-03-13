@@ -1,0 +1,57 @@
+# =============================================
+# Trade Intelligence Platform - .gitignore
+# =============================================
+
+# --- Secrets (NEVER commit) ---
+.env
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+env/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+*.egg-info/
+dist/
+build/
+*.egg
+
+# --- Database files ---
+*.db
+*.sqlite3
+*.sqlite
+
+# --- Vector DB ---
+chroma_db/
+
+# --- IDE / Editor ---
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.DS_Store
+Thumbs.db
+
+# --- Logs ---
+*.log
+logs/
+
+# --- OS ---
+*.tmp
+*.bak
+*.swp
+
+# --- Node (if frontend is ever added) ---
+node_modules/
+.next/
+dist/

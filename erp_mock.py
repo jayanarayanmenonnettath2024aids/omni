@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import List, Dict, Optional
 import datetime
@@ -66,92 +67,33 @@ MOCK_SHIPMENTS = [
     {"invoice_no": "LOG-EXP-2026-014", "shipping_bill_no": "SBC-EXP-555", "port": "Chennai Port", "clearance_status": "Vessel Departed", "clearance_date": "2026-04-09"},
 ]
 
-@app.get("/", response_class=HTMLResponse)
-def erp_dashboard():
-    # Adding a couple more mock rows for better visual density
-    extended_transactions = MOCK_TRANSACTIONS + [
-        {
-            "invoice_no": "LOG-EXP-2026-008",
-            "client_name": "Nordic Solutions",
-            "gst_id": "33NORD9900F1Z4",
-            "item": "Auto Parts - 5 Containers",
-            "category": "Automotive",
-            "hs_code": "8708",
-            "qty": 5,
-            "rate": 45000,
-            "date": "2026-04-02",
-            "trade_type": "EXPORT",
-            "origin": "Chennai",
-            "destination": "Oslo",
-            "port": "Chennai Port",
-            "customs_duty": 0
-        },
-        {
-            "invoice_no": "LOG-INV-2026-009",
-            "client_name": "Reliance Retail",
-            "gst_id": "27REL1234F1Z9",
-            "item": "Apparel & Textiles",
-            "category": "Retail",
-            "hs_code": None,
-            "qty": 500,
-            "rate": 120,
-            "date": "2026-04-03",
-            "trade_type": "DOMESTIC",
-            "origin": "Surat",
-            "destination": "Bangalore",
-            "port": None,
-            "customs_duty": None
-        }
-    ]
+# Mount static files from the React build directory
+# Assuming 'npm run build' generates files in 'frontend/dist'
+if os.path.exists("frontend/dist"):
+    app.mount("/assets", StaticFiles(directory="frontend/dist/assets"), name="assets")
 
-    # Generate table rows dynamically
-    rows = ""
-    for t in extended_transactions:
-        type_class = ""
-        if t['trade_type'] == "DOMESTIC":
-            type_class = "bg-blue-100 text-blue-800 border-blue-200"
-        elif t['trade_type'] == "EXPORT":
-            type_class = "bg-emerald-100 text-emerald-800 border-emerald-200"
-        else:
-            type_class = "bg-amber-100 text-amber-800 border-amber-200"
-
-        value = f"₹{(t['qty'] * t['rate']):,.2f}"
-        rows += f'''
-        <tr class="hover:bg-slate-50 transition-colors border-b border-slate-100">
-            <td class="py-4 px-6 text-sm font-semibold text-slate-800">{t['invoice_no']}</td>
-            <td class="py-4 px-6 text-sm text-slate-600 font-medium">{t['client_name']}</td>
-            <td class="py-4 px-6 text-sm"><span class="px-3 py-1 text-xs font-semibold rounded-full border {type_class}">{t['trade_type']}</span></td>
-            <td class="py-4 px-6 text-sm text-slate-600 truncate max-w-xs">{t['item']}</td>
-            <td class="py-4 px-6 text-sm text-slate-500">{t['date']}</td>
-            <td class="py-4 px-6 text-sm text-slate-800 font-medium text-right">{value}</td>
-            <td class="py-4 px-6 text-center text-slate-400 hover:text-indigo-600 cursor-pointer"><i class="fas fa-ellipsis-v"></i></td>
-        </tr>
-        '''
+@app.get("/{full_path:path}", response_class=HTMLResponse)
+def serve_react_app(full_path: str):
+    # This acts as a catch-all for SPA routing
+    # But we want to allow API routes to be handled first
+    if full_path.startswith("api/") or full_path.startswith("erp/") or full_path.startswith("portal/"):
+        raise HTTPException(status_code=404)
         
-    shipment_rows = ""
-    for s in MOCK_SHIPMENTS:
-        status_color = "bg-emerald-100 text-emerald-800 border-emerald-200" if "Cleared" in s['clearance_status'] else "bg-amber-100 text-amber-800 border-amber-200"
-        icon = "fa-check-circle" if "Cleared" in s['clearance_status'] else "fa-clock"
-        shipment_rows += f'''
-        <tr class="hover:bg-slate-50 transition-colors border-b border-slate-100">
-            <td class="py-4 px-6 text-sm font-semibold text-slate-800">{s['invoice_no']}</td>
-            <td class="py-4 px-6 text-sm text-slate-600">{s['shipping_bill_no']}</td>
-            <td class="py-4 px-6 text-sm text-slate-600"><div class="flex items-center"><i class="fas fa-anchor text-slate-400 mr-2"></i>{s['port']}</div></td>
-            <td class="py-4 px-6 text-sm"><span class="px-3 py-1 text-xs font-semibold rounded-full border {status_color} flex items-center inline-flex"><i class="fas {icon} mr-1"></i>{s['clearance_status']}</span></td>
-            <td class="py-4 px-6 text-sm text-slate-500">{s['clearance_date']}</td>
-        </tr>
-        '''
-
-    import os
-    file_path = os.path.join(os.path.dirname(__file__), "dashboard.html")
-    with open(file_path, "r", encoding="utf-8") as f:
-        html_content = f.read()
-
-    # Inject the dynamic rows into the HTML template placeholders
-    html_content = html_content.replace("<!--ROWS_PLACEHOLDER-->", rows)
-    html_content = html_content.replace("<!--SHIPMENTS_PLACEHOLDER-->", shipment_rows)
-
-    return html_content
+    build_index = os.path.join("frontend", "dist", "index.html")
+    if os.path.exists(build_index):
+        with open(build_index, "r", encoding="utf-8") as f:
+            return f.read()
+    
+    # Fallback to a helpful message if build not found
+    return """
+    <html>
+        <body style="font-family: sans-serif; padding: 2rem; background: #0f2042; color: white;">
+            <h1>OmniLogix React App</h1>
+            <p>React build not found. Please run <code>npm run build</code> in the <code>frontend</code> directory.</p>
+            <p><a href="/erp/transactions" style="color: #4c9aff;">View Raw ERP API</a></p>
+        </body>
+    </html>
+    """
 
 @app.get("/erp/transactions")
 def get_transactions() -> List[Dict]:

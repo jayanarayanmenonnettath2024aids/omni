@@ -8,6 +8,7 @@
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -471,39 +472,128 @@
 
             <!-- VIEW: AI QUERY ASSISTANT -->
             <div x-show="currentTab === 'ai'" style="display: none;" class="h-full flex flex-col" x-transition x-data="{ 
-                query: '', 
+                query: '',
                 messages: [
-                    { role: 'ai', content: 'Hello! I am your Trade Intelligence Assistant. You can **speak** or type to me. I support English and Tamil.' }
+                    { role: 'ai', content: 'Hello! I am your Trade Intelligence Assistant. You can **speak** or type to me. I support English, Tamil, and Hindi.' }
                 ],
                 suggestedPrompts: ['trade data this month', 'how many shipments left', 'show pending imports', 'top anomaly alerts'],
                 isLoading: false,
                 isRecording: false,
                 currentLang: 'en-IN',
-                voiceEnabled: false,
+                voiceEnabled: true,
                 langOptions: [
                     { code: 'en-IN', label: 'EN' },
                     { code: 'ta-IN', label: 'தமிழ்' },
                     { code: 'hi-IN', label: 'हिंदी' }
                 ],
                 ttsMode: 'auto',
-                preferredVoiceProfile: 'indian',
-                findPreferredVoice() {
-                    const voices = window.speechSynthesis ? window.speechSynthesis.getVoices() : [];
-                    if (!voices || !voices.length) return null;
-
-                    const langPrefix = (this.currentLang || 'en-IN').split('-')[0].toLowerCase();
-                    const sameLang = voices.filter(v => (v.lang || '').toLowerCase().startsWith(langPrefix));
-                    const pool = sameLang.length ? sameLang : voices;
-
-                    if (this.preferredVoiceProfile === 'indian') {
-                        const indian = pool.find(v => {
-                            const s = `${v.name} ${v.lang}`.toLowerCase();
-                            return s.includes('india') || s.includes('indian') || s.includes('hindi') || s.includes('tamil');
-                        });
-                        if (indian) return indian;
+                audioPlayer: null,
+                latestAudioUrl: null,
+                voiceError: '',
+                sttError: '',
+                voiceChatMode: false,
+                voiceChatRec: null,
+                voiceChatStatus: 'idle',
+                _uiText(kind) {
+                    const mode = (this.currentLang || 'en-IN').toLowerCase();
+                    if (mode.startsWith('ta')) {
+                        const ta = {
+                            systemError: 'சிஸ்டம் பிழை: சேவையக இணைப்பை சரிபார்த்து மீண்டும் முயற்சி செய்யவும்.',
+                            ttsFailed: 'குரல் உருவாக்கம் தோல்வியடைந்தது. மீண்டும் முயற்சி செய்யவும்.'
+                        };
+                        return ta[kind] || ta.systemError;
                     }
-
-                    return pool[0] || null;
+                    if (mode.startsWith('hi')) {
+                        const hi = {
+                            systemError: 'सिस्टम त्रुटि: सर्वर कनेक्शन जांचें और फिर से प्रयास करें।',
+                            ttsFailed: 'वॉइस जनरेशन विफल हुआ। कृपया दोबारा प्रयास करें।'
+                        };
+                        return hi[kind] || hi.systemError;
+                    }
+                    const en = {
+                        systemError: 'System error: check backend connection and retry.',
+                        ttsFailed: 'Voice generation failed. Please retry.'
+                    };
+                    return en[kind] || en.systemError;
+                },
+                renderMessage(content) {
+                    const raw = (content || '').toString();
+                    if (window.marked && typeof window.marked.parse === 'function') {
+                        return window.marked.parse(raw);
+                    }
+                    return raw.replace(/\n/g, '<br>');
+                },
+                async playLatestAudio() {
+                    if (!this.latestAudioUrl) {
+                        this.voiceError = 'No audio available yet.';
+                        this.ttsMode = 'error';
+                        return;
+                    }
+                    try {
+                        if (this.audioPlayer) {
+                            this.audioPlayer.pause();
+                            this.audioPlayer = null;
+                        }
+                        const audio = new Audio(this.latestAudioUrl);
+                        audio.preload = 'auto';
+                        audio.volume = 1;
+                        this.audioPlayer = audio;
+                        await audio.play();
+                        this.voiceError = '';
+                        this.ttsMode = 'elevenlabs';
+                        audio.onended = () => { this.audioPlayer = null; };
+                    } catch (playErr) {
+                        this.audioPlayer = null;
+                        this.voiceError = 'AUTOPLAY BLOCKED. Click PLAY VOICE.';
+                        this.ttsMode = 'blocked';
+                    }
+                },
+                async _speakAnswer(answerText) {
+                    if (!this.voiceEnabled) {
+                        this.ttsMode = 'off';
+                        return;
+                    }
+                    if (this.audioPlayer) {
+                        this.audioPlayer.pause();
+                        this.audioPlayer = null;
+                    }
+                    if (this.latestAudioUrl) {
+                        URL.revokeObjectURL(this.latestAudioUrl);
+                        this.latestAudioUrl = null;
+                    }
+                    const cleanText = (answerText || '')
+                        .replace(/<br>/g, ' ')
+                        .replace(/[#*`_>\[\]()]/g, '')
+                        .replace(/\s+/g, ' ')
+                        .trim()
+                        .slice(0, 600);
+                    if (!cleanText) {
+                        this.ttsMode = 'error';
+                        return;
+                    }
+                    try {
+                        const ttsRes = await fetch('/api/tts', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({ text: cleanText, lang: this.currentLang })
+                        });
+                        if (ttsRes.ok) {
+                            const blob = await ttsRes.blob();
+                            if (!blob || blob.size < 256) {
+                                this.ttsMode = 'error';
+                                this.voiceError = this._uiText('ttsFailed');
+                                return;
+                            }
+                            this.latestAudioUrl = URL.createObjectURL(blob);
+                            await this.playLatestAudio();
+                        } else {
+                            this.voiceError = `TTS API error (${ttsRes.status}). ${this._uiText('ttsFailed')}`;
+                            this.ttsMode = 'error';
+                        }
+                    } catch (ttsErr) {
+                        this.voiceError = this._uiText('ttsFailed');
+                        this.ttsMode = 'error';
+                    }
                 },
                 async sendQuery() {
                     if (!this.query.trim()) return;
@@ -511,70 +601,222 @@
                     this.messages.push({ role: 'user', content: userMsg });
                     this.query = '';
                     this.isLoading = true;
-                    
                     try {
+                        const history = this.messages.slice(-14, -1).map(m => ({ role: m.role, content: m.content }));
                         const response = await fetch('/api/ai/chat', {
                             method: 'POST',
                             headers: {'Content-Type': 'application/json'},
-                            body: JSON.stringify({ message: userMsg, lang: this.currentLang })
+                            body: JSON.stringify({ message: userMsg, lang: this.currentLang, history })
                         });
                         const data = await response.json();
                         this.messages.push({ role: 'ai', content: data.answer });
-
-                        if (!this.voiceEnabled) {
-                            this.ttsMode = 'off';
-                            return;
-                        }
-                        
-                        // Text-to-Speech via ElevenLabs (backend /api/tts)
-                        const cleanText = data.answer.replace(/<br>/g, ' ').replace(/[#*]/g, '').trim();
-                        try {
-                            const ttsRes = await fetch('/api/tts', {
-                                method: 'POST',
-                                headers: {'Content-Type': 'application/json'},
-                                body: JSON.stringify({ text: cleanText, lang: this.currentLang })
-                            });
-                            if (ttsRes.ok) {
-                                const blob = await ttsRes.blob();
-                                const audioUrl = URL.createObjectURL(blob);
-                                const audio = new Audio(audioUrl);
-                                await audio.play();
-                                this.ttsMode = 'elevenlabs';
-                                // Clean up object URL after playback
-                                audio.onended = () => URL.revokeObjectURL(audioUrl);
-                            } else {
-                                const errText = await ttsRes.text();
-                                console.warn('ElevenLabs TTS failed:', ttsRes.status, errText);
-                                this.ttsMode = 'error';
-                            }
-                        } catch (ttsErr) {
-                            // TTS failure is non-fatal — chat still works
-                            console.warn('ElevenLabs TTS error:', ttsErr);
-                            this.ttsMode = 'error';
-                        }
+                        await this._speakAnswer(data.answer || '');
                     } catch (e) {
-                        this.messages.push({ role: 'ai', content: 'System Error: Connect to backend for real-time analysis.' });
+                        this.messages.push({ role: 'ai', content: this._uiText('systemError') });
                     } finally {
                         this.isLoading = false;
                     }
                 },
-                startVoice() {
-                    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-                    if (!SpeechRecognition) {
-                        alert('Voice recognition not supported in this browser.');
+                _recognitionCtor() {
+                    return window.SpeechRecognition || window.webkitSpeechRecognition || null;
+                },
+                async _ensureMicPermission() {
+                    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
                         return;
                     }
-                    const rec = new SpeechRecognition();
-                    rec.lang = this.currentLang;
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    stream.getTracks().forEach(t => t.stop());
+                },
+                _friendlySttError(code) {
+                    if (!code) return 'Voice input failed. Please try again.';
+                    if (code === 'not-allowed' || code === 'service-not-allowed') return 'Microphone permission denied. Please allow mic access in browser settings.';
+                    if (code === 'audio-capture') return 'No microphone detected. Check your input device.';
+                    if (code === 'network') return 'Speech service network error. Check internet and retry.';
+                    if (code === 'no-speech-early') return 'Mic started too quickly. Please speak after pressing mic and keep speaking for 2-3 seconds.';
+                    if (code === 'no-speech' || code === 'aborted' || code === 'timeout' || code === 'nomatch') return 'No speech detected. Check browser mic input device (not just system mic), then retry.';
+                    return `Voice input error: ${code}`;
+                },
+                _listenOnceWithLang(langCode) {
+                    const Ctor = this._recognitionCtor();
+                    return new Promise((resolve, reject) => {
+                        if (!Ctor) {
+                            reject(new Error('unsupported'));
+                            return;
+                        }
+                        const rec = new Ctor();
+                        this.voiceChatRec = rec;
+                        const startedAt = Date.now();
+                        rec.lang = langCode;
+                        rec.continuous = false;
+                        rec.interimResults = true;
+                        rec.maxAlternatives = 1;
+
+                        let done = false;
+                        let transcript = '';
+                        let heardSomething = false;
+                        let silenceTimer = null;
+                        const finish = (ok, val) => {
+                            if (done) return;
+                            done = true;
+                            clearTimeout(timer);
+                            if (silenceTimer) clearTimeout(silenceTimer);
+                            if (ok) resolve(val);
+                            else reject(new Error(val));
+                        };
+
+                        const timer = setTimeout(() => {
+                            try { rec.stop(); } catch (e) {}
+                            if (transcript.trim()) finish(true, transcript.trim());
+                            else finish(false, 'timeout');
+                        }, 20000);
+
+                        rec.onresult = (e) => {
+                            let combined = '';
+                            for (let i = 0; i < e.results.length; i += 1) {
+                                combined += (e.results[i][0].transcript || '') + ' ';
+                            }
+                            const candidate = combined.trim();
+                            if (candidate) {
+                                transcript = candidate;
+                                heardSomething = true;
+                                if (silenceTimer) clearTimeout(silenceTimer);
+                                // Wait for a short silence after speech, then finalize.
+                                silenceTimer = setTimeout(() => {
+                                    try { rec.stop(); } catch (stopErr) {}
+                                }, 1200);
+                            }
+                        };
+                        rec.onerror = (e) => {
+                            const code = e.error || 'unknown';
+                            const elapsed = Date.now() - startedAt;
+                            if (code === 'no-speech' && elapsed < 1200) {
+                                finish(false, 'no-speech-early');
+                                return;
+                            }
+                            if ((code === 'no-speech' || code === 'aborted') && transcript.trim()) {
+                                finish(true, transcript.trim());
+                                return;
+                            }
+                            finish(false, code);
+                        };
+                        rec.onend = () => {
+                            const elapsed = Date.now() - startedAt;
+                            if (transcript.trim()) finish(true, transcript.trim());
+                            else if (elapsed < 1200) finish(false, 'no-speech-early');
+                            else if (heardSomething) finish(false, 'nomatch');
+                            else finish(false, 'no-speech');
+                        };
+
+                        try {
+                            rec.start();
+                        } catch (err) {
+                            finish(false, 'start-failed');
+                        }
+                    });
+                },
+                async _captureSpeechSelectedLang(maxAttempts = 3) {
+                    let lastError = 'no-speech';
+                    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+                        try {
+                            return await this._listenOnceWithLang(this.currentLang || 'en-IN');
+                        } catch (err) {
+                            const code = (err && err.message) ? err.message : 'unknown';
+                            lastError = code;
+                            // Retry automatically for warm-up/early no-speech races.
+                            if (code === 'no-speech-early' || code === 'no-speech' || code === 'aborted' || code === 'nomatch') {
+                                await new Promise(r => setTimeout(r, 250));
+                                continue;
+                            }
+                            throw err;
+                        }
+                    }
+                    throw new Error(lastError);
+                },
+                async startVoice() {
+                    if (!this._recognitionCtor()) {
+                        alert('Voice recognition not supported in this browser. Use Chrome/Edge over HTTP or localhost.');
+                        return;
+                    }
                     this.isRecording = true;
-                    rec.onresult = (e) => {
-                        this.query = e.results[0][0].transcript;
+                    this.sttError = '';
+                    try {
+                        await this._ensureMicPermission();
+                        // Small warm-up delay improves first-click capture reliability in Chromium.
+                        await new Promise(r => setTimeout(r, 180));
+                        const transcript = await this._captureSpeechSelectedLang(3);
+                        this.query = transcript;
+                        await this.sendQuery();
+                    } catch (err) {
+                        this.sttError = this._friendlySttError((err && err.message) ? err.message : 'unknown');
+                    } finally {
                         this.isRecording = false;
-                        this.sendQuery();
-                    };
-                    rec.onerror = () => { this.isRecording = false; };
-                    rec.onend = () => { this.isRecording = false; };
-                    rec.start();
+                    }
+                },
+                startVoiceChatMode() {
+                    if (!this._recognitionCtor()) {
+                        alert('Voice recognition not supported in this browser. Try Chrome.');
+                        return;
+                    }
+                    this.sttError = '';
+                    this._ensureMicPermission().then(() => {
+                        this.voiceChatMode = true;
+                        this.voiceChatStatus = 'listening';
+                        this._voiceChatLoop();
+                    }).catch((err) => {
+                        this.sttError = this._friendlySttError((err && err.message) ? err.message : 'not-allowed');
+                    });
+                },
+                stopVoiceChatMode() {
+                    this.voiceChatMode = false;
+                    this.voiceChatStatus = 'idle';
+                    this.isRecording = false;
+                    if (this.voiceChatRec) {
+                        try { this.voiceChatRec.stop(); } catch(e) {}
+                        this.voiceChatRec = null;
+                    }
+                },
+                async _voiceChatLoop() {
+                    if (!this.voiceChatMode) return;
+                    this.isRecording = true;
+                    this.voiceChatStatus = 'listening';
+                    this.sttError = '';
+                    let transcript = '';
+                    try {
+                        transcript = await this._captureSpeechSelectedLang(3);
+                    } catch (err) {
+                        this.isRecording = false;
+                        this.sttError = this._friendlySttError((err && err.message) ? err.message : 'unknown');
+                        if (this.voiceChatMode) setTimeout(() => this._voiceChatLoop(), 1000);
+                        return;
+                    }
+
+                    this.isRecording = false;
+                    if (!transcript.trim()) {
+                        if (this.voiceChatMode) setTimeout(() => this._voiceChatLoop(), 600);
+                        return;
+                    }
+
+                    this.voiceChatStatus = 'processing';
+                    const userMsg = transcript;
+                    this.messages.push({ role: 'user', content: userMsg });
+                    this.isLoading = true;
+                    try {
+                        const history = this.messages.slice(-14, -1).map(m => ({ role: m.role, content: m.content }));
+                        const resp = await fetch('/api/ai/chat', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({ message: userMsg, lang: this.currentLang, history })
+                        });
+                        const data = await resp.json();
+                        this.messages.push({ role: 'ai', content: data.answer });
+                        this.voiceChatStatus = 'speaking';
+                        await this._speakAnswer(data.answer || '');
+                    } catch (err) {
+                        this.messages.push({ role: 'ai', content: this._uiText('systemError') });
+                    } finally {
+                        this.isLoading = false;
+                        if (this.voiceChatMode) setTimeout(() => this._voiceChatLoop(), 700);
+                    }
                 }
             }">
                 <div class="flex-1 bg-white border border-corp-border rounded enterprise-shadow flex flex-col overflow-hidden">
@@ -584,32 +826,54 @@
                             <span class="font-semibold text-corp-dark">Trade Intelligence Assistant</span>
                         </div>
                         <div class="flex items-center gap-2">
-                             <button @click="voiceEnabled = !voiceEnabled; if (!voiceEnabled) { window.speechSynthesis.cancel(); ttsMode = 'off'; }"
-                                 class="text-[10px] font-bold uppercase px-2 py-0.5 rounded border"
-                                 :class="voiceEnabled ? 'text-emerald-700 bg-emerald-50 border-emerald-200' : 'text-gray-500 bg-gray-50 border-gray-200'"
-                                 x-text="voiceEnabled ? 'Voice: ON' : 'Voice: OFF'"></button>
-                             <span class="text-[10px] font-bold uppercase px-2 py-0.5 rounded border"
-                                 :class="ttsMode === 'elevenlabs' ? 'text-emerald-700 bg-emerald-50 border-emerald-200' : (ttsMode === 'error' ? 'text-red-700 bg-red-50 border-red-200' : 'text-gray-500 bg-gray-50 border-gray-200')"
-                                 x-text="ttsMode === 'elevenlabs' ? 'Engine: ElevenLabs' : (ttsMode === 'error' ? 'Engine: ElevenLabs Error' : 'Engine: Idle')"></span>
-                             <span class="text-[10px] font-bold text-gray-400 uppercase">Input Language:</span>
-                             <div class="flex bg-gray-200 p-0.5 rounded text-[10px] font-bold">
-                                 <template x-for="opt in langOptions" :key="opt.code">
-                                     <button @click="currentLang = opt.code" 
-                                             class="px-2 py-0.5 rounded transition-all"
-                                             :class="currentLang === opt.code ? 'bg-white text-corp-blue shadow-sm' : 'text-gray-500'"
-                                             x-text="opt.label"></button>
-                                 </template>
-                             </div>
+                            <button @click="voiceEnabled = !voiceEnabled; if (!voiceEnabled) { if (audioPlayer) { audioPlayer.pause(); audioPlayer = null; } ttsMode = 'off'; }"
+                                class="text-[10px] font-bold uppercase px-2 py-0.5 rounded border"
+                                :class="voiceEnabled ? 'text-emerald-700 bg-emerald-50 border-emerald-200' : 'text-gray-500 bg-gray-50 border-gray-200'"
+                                x-text="voiceEnabled ? 'Voice: ON' : 'Voice: OFF'"></button>
+                            <button x-show="voiceEnabled && latestAudioUrl" @click="playLatestAudio()" class="text-[10px] font-bold uppercase px-2 py-0.5 rounded border text-blue-700 bg-blue-50 border-blue-200">Replay</button>
+                            <button x-show="ttsMode === 'blocked' && latestAudioUrl" @click="playLatestAudio()" class="text-[10px] font-bold uppercase px-2 py-0.5 rounded border text-orange-700 bg-orange-50 border-orange-200 animate-pulse">PLAY VOICE</button>
+                            <button @click="voiceChatMode ? stopVoiceChatMode() : startVoiceChatMode()" class="text-[10px] font-bold uppercase px-2 py-0.5 rounded border" :class="voiceChatMode ? 'text-red-700 bg-red-50 border-red-300 animate-pulse' : 'text-indigo-700 bg-indigo-50 border-indigo-200'" x-text="voiceChatMode ? 'Stop Voice Mode' : 'Voice Mode'"></button>
+                            <span class="text-[10px] font-bold uppercase px-2 py-0.5 rounded border" :class="ttsMode === 'elevenlabs' ? 'text-emerald-700 bg-emerald-50 border-emerald-200' : (ttsMode === 'blocked' ? 'text-orange-700 bg-orange-50 border-orange-200' : (ttsMode === 'error' ? 'text-red-700 bg-red-50 border-red-200' : 'text-gray-500 bg-gray-50 border-gray-200'))" x-text="ttsMode === 'elevenlabs' ? 'Engine: ElevenLabs' : (ttsMode === 'blocked' ? 'Click PLAY VOICE' : (ttsMode === 'error' ? 'TTS Error' : 'Engine: Idle'))"></span>
+                            <span class="text-[10px] font-bold text-gray-400 uppercase">Input Language:</span>
+                            <div class="flex bg-gray-200 p-0.5 rounded text-[10px] font-bold">
+                                <template x-for="opt in langOptions" :key="opt.code">
+                                    <button @click="currentLang = opt.code" class="px-2 py-0.5 rounded transition-all" :class="currentLang === opt.code ? 'bg-white text-corp-blue shadow-sm' : 'text-gray-500'" x-text="opt.label"></button>
+                                </template>
+                            </div>
                         </div>
                     </div>
-                    
-                    <!-- Chat Area -->
+                    <div class="px-6 py-2 border-b border-corp-border bg-blue-50 text-[11px] text-blue-800 font-semibold">
+                        Speak in the selected input language (EN / தமிழ் / हिंदी) for best mic recognition.
+                    </div>
+
+                    <div class="px-6 py-2 border-b border-corp-border bg-yellow-50" x-show="latestAudioUrl">
+                        <div class="flex items-center gap-3">
+                            <button @click="playLatestAudio()" class="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-4 py-2 rounded shadow transition-all">
+                                <i class="fas fa-volume-up"></i> Play Voice
+                            </button>
+                            <audio :src="latestAudioUrl" controls class="flex-1"></audio>
+                        </div>
+                        <div x-show="voiceError" class="mt-1 text-[11px] text-orange-700 font-semibold" x-text="voiceError"></div>
+                    </div>
+
                     <div class="flex-1 overflow-y-auto p-6 space-y-6 bg-white">
+                        <div x-show="voiceChatMode" class="mb-4 rounded-xl bg-gradient-to-r from-indigo-900 to-slate-900 text-white p-4 flex items-center gap-4 shadow-lg">
+                            <div class="w-9 h-9 rounded-full flex items-center justify-center" :class="voiceChatStatus === 'listening' ? 'bg-red-500' : (voiceChatStatus === 'speaking' ? 'bg-emerald-500' : 'bg-yellow-500')">
+                                <i class="fas text-white text-sm" :class="voiceChatStatus === 'listening' ? 'fa-microphone animate-pulse' : (voiceChatStatus === 'speaking' ? 'fa-volume-up animate-pulse' : 'fa-cog fa-spin')"></i>
+                            </div>
+                            <div class="flex-1">
+                                <div class="font-bold text-sm">Voice Chat Mode Active</div>
+                                <div class="text-xs text-indigo-200" x-text="voiceChatStatus === 'listening' ? 'Listening... speak now' : (voiceChatStatus === 'speaking' ? 'AI is speaking...' : 'Processing...')"></div>
+                            </div>
+                            <button @click="stopVoiceChatMode()" class="bg-red-600 hover:bg-red-700 text-white text-xs font-bold px-3 py-2 rounded shadow">Stop</button>
+                        </div>
+
                         <div class="flex flex-wrap gap-2">
                             <template x-for="prompt in suggestedPrompts">
                                 <button @click="query = prompt; sendQuery()" class="text-xs px-3 py-1.5 rounded-full border border-blue-200 text-blue-700 bg-blue-50 hover:bg-blue-100 transition-colors" x-text="prompt"></button>
                             </template>
                         </div>
+
                         <template x-for="msg in messages">
                             <div class="flex gap-4" :class="msg.role === 'user' ? 'flex-row-reverse' : ''">
                                 <div class="w-8 h-8 rounded flex items-center justify-center flex-shrink-0 mt-1" :class="msg.role === 'ai' ? 'bg-blue-100' : 'bg-corp-navy text-white text-xs font-bold border border-corp-border'">
@@ -618,7 +882,7 @@
                                 </div>
                                 <div class="max-w-2xl">
                                     <div class="p-4 text-sm rounded-lg" :class="msg.role === 'ai' ? 'bg-gray-50 border border-gray-100 rounded-tl-none text-corp-dark' : 'bg-blue-600 text-white rounded-tr-none shadow-sm'">
-                                        <p x-html="msg.content"></p>
+                                        <div x-html="renderMessage(msg.content)"></div>
                                     </div>
                                     <div x-show="msg.role === 'ai'" class="text-[10px] text-gray-400 mt-1 uppercase tracking-tighter">Verified from Unified Data Lake</div>
                                 </div>
@@ -629,18 +893,16 @@
                             <div class="bg-gray-50 border border-gray-100 rounded p-3 text-xs text-gray-400">RAG Pipeline retrieving context...</div>
                         </div>
                     </div>
-                    
-                    <!-- Input -->
+
                     <div class="p-4 border-t border-corp-border bg-white">
                         <div class="relative flex items-center gap-2">
-                            <button @click="startVoice()" 
-                                    class="w-10 h-10 rounded-full flex items-center justify-center transition-all shadow-sm"
-                                    :class="isRecording ? 'bg-red-500 text-white animate-pulse' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'">
+                            <button @click="startVoice()" class="w-10 h-10 rounded-full flex items-center justify-center transition-all shadow-sm" :class="isRecording ? 'bg-red-500 text-white animate-pulse' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'">
                                 <i class="fas" :class="isRecording ? 'fa-microphone' : 'fa-microphone-alt'"></i>
                             </button>
                             <input type="text" x-model="query" @keyup.enter="sendQuery()" placeholder="Ask via voice or type..." class="flex-1 px-4 py-3 border border-gray-300 rounded focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-sm shadow-sm transition-all">
                             <button @click="sendQuery()" class="w-10 h-10 bg-blue-600 text-white rounded-full flex items-center justify-center hover:bg-blue-800 shadow-lg"><i class="fas fa-paper-plane text-xs"></i></button>
                         </div>
+                        <div x-show="sttError" class="mt-2 text-[11px] text-red-700 font-semibold" x-text="sttError"></div>
                     </div>
                 </div>
             </div>

@@ -165,7 +165,8 @@ def get_portal_shipments() -> List[Dict]:
 def ai_chat(query: Dict):
     user_text = query.get("message", "")
     lang = query.get("lang", "en-IN")
-    return get_ai_response(user_text, lang)
+    history = query.get("history", [])
+    return get_ai_response(user_text, lang, history)
 
 @app.get("/api/analytics/stats")
 def get_stats(role: str = "super"):

@@ -1,3 +1,19 @@
+def _infer_email_trade_type(raw):
+    text = " ".join([
+        str(raw.get("subject") or ""),
+        str(raw.get("body") or ""),
+        str(raw.get("item") or ""),
+    ]).lower()
+
+    if "export shipment invoice generated" in text or "export" in text:
+        return "EXPORT"
+    if "import shipment arrival notice" in text or "import" in text:
+        return "IMPORT"
+    if "local delivery confirmation" in text or "local" in text or "domestic" in text:
+        return "DOMESTIC"
+    return "DOMESTIC"
+
+
 def transform_erp_record(raw):
     # Ensure quantity and unit_price are somewhat handled if None
     quantity = int(raw.get("qty") or 0)
@@ -46,17 +62,22 @@ def transform_portal_record(raw):
     }
 
 def transform_email_record(raw):
+    trade_type = (raw.get("trade_type") or _infer_email_trade_type(raw)).upper()
     return {
         "source": "EMAIL",
         "document_type": "INVOICE",
         "invoice_no": raw.get("invoice_no"),
+        "trade_type": trade_type,
         "customer": {
             "name": raw.get("client_name"),
             "gst_number": raw.get("gst_id")
         },
         "transaction": {
             "total_value": float(raw.get("amount", 0)),
-            "transaction_date": raw.get("date")
+            "transaction_date": raw.get("date"),
+            "trade_type": trade_type,
+            "quantity": int(raw.get("qty", 1) or 1),
+            "unit_price": float(raw.get("amount", 0) or 0),
         }
     }
 
@@ -91,4 +112,4 @@ def transform_excel_record(raw):
             "route": raw.get("route"),
             "transport_mode": raw.get("transport_mode")
         }
-    }
+    }

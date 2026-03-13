@@ -52,18 +52,214 @@
 <body class="bg-corp-light font-sans text-corp-dark overflow-hidden h-screen flex" x-data="{ 
     isLoggedIn: false, 
     userRole: 'super', 
+    currentUserId: '',
+    currentUserName: 'Guest',
+    loginUserId: '',
+    loginPassword: '',
+    authError: '',
     currentTab: 'dashboard',
+    autoRefreshTimer: null,
+    transactions: [],
+    shipments: [],
+    recentActivities: [],
+    ingestionConnectors: [],
+    ingestionError: '',
+    ingestionSuccess: '',
+    isIngestionSyncing: false,
+    pipelineSteps: [
+        { key: 'collection', label: 'Collection', icon: 'fa-inbox', status: 'idle' },
+        { key: 'ocr', label: 'OCR/Parsing', icon: 'fa-file-pdf', status: 'idle' },
+        { key: 'nlp', label: 'NLP Extraction', icon: 'fa-brain', status: 'idle' },
+        { key: 'mdm', label: 'Entity Res (MDM)', icon: 'fa-fingerprint', status: 'idle' },
+        { key: 'db', label: 'DB Storage', icon: 'fa-database', status: 'idle' },
+        { key: 'vector', label: 'Vector Indexing', icon: 'fa-layer-group', status: 'idle' }
+    ],
+    insights: {
+        total_shipments: 0,
+        pending_shipments: 0,
+        total_value: 0,
+        avg_ticket: 0,
+        top_routes: []
+    },
     userRoles: {
         'export': { name: 'Export Manager', icon: 'fa-plane-departure', color: 'bg-emerald-600' },
         'import': { name: 'Import Desk', icon: 'fa-ship', color: 'bg-amber-600' },
         'domestic': { name: 'Logistics Lead', icon: 'fa-truck', color: 'bg-blue-600' },
         'super': { name: 'Port Authority (Super)', icon: 'fa-shield-alt', color: 'bg-indigo-700' }
     },
-    login(role) {
-        this.userRole = role;
-        this.isLoggedIn = true;
-        this.currentTab = 'dashboard';
-        initCharts();
+    async login() {
+        this.authError = '';
+        try {
+            const res = await fetch('/api/auth/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user_id: this.loginUserId, password: this.loginPassword })
+            });
+            const data = await res.json();
+            if (!res.ok) {
+                this.authError = data.detail || 'Invalid credentials.';
+                return;
+            }
+            this.userRole = data.role;
+            this.currentUserId = data.user_id;
+            this.currentUserName = data.display_name;
+            this.isLoggedIn = true;
+            this.currentTab = 'dashboard';
+            await this.loadDashboardData();
+            await this.loadIngestionConnectors();
+            await initCharts();
+            this.startAutoRefresh();
+        } catch (e) {
+            this.authError = 'Login failed. Check server connection.';
+        }
+    },
+    startAutoRefresh() {
+        if (this.autoRefreshTimer) {
+            clearInterval(this.autoRefreshTimer);
+            this.autoRefreshTimer = null;
+        }
+        this.autoRefreshTimer = setInterval(async () => {
+            if (!this.isLoggedIn) return;
+            await this.loadDashboardData();
+        }, 20000);
+    },
+    async loadDashboardData() {
+        try {
+            const resp = await fetch(`/api/dashboard/data?role=${this.userRole}&tx_limit=200&sh_limit=200`);
+            if (!resp.ok) return;
+            const payload = await resp.json();
+            this.transactions = payload.transactions || [];
+            this.shipments = payload.shipments || [];
+            this.insights = payload.insights || this.insights;
+
+            const shipmentByInvoice = {};
+            for (const s of this.shipments) {
+                if (!shipmentByInvoice[s.invoice_no]) shipmentByInvoice[s.invoice_no] = s;
+            }
+
+            this.recentActivities = (this.transactions || []).slice(0, 12).map((t) => {
+                const s = shipmentByInvoice[t.invoice_no] || {};
+                return {
+                    invoice_no: t.invoice_no,
+                    company: t.client_name || 'N/A',
+                    product: t.item || 'N/A',
+                    route: `${t.origin || 'N/A'} -> ${t.destination || 'N/A'}`,
+                    status: s.clearance_status || 'No Shipment Status',
+                    updated_at: s.clearance_date || t.date || 'N/A'
+                };
+            });
+        } catch (_e) {}
+    },
+    async refreshInsights() {
+        await this.loadDashboardData();
+        await initCharts();
+    },
+    async loadIngestionConnectors() {
+        try {
+            const resp = await fetch('/api/ingestion/connectors');
+            if (!resp.ok) return;
+            const payload = await resp.json();
+            this.ingestionConnectors = payload.connectors || [];
+        } catch (_e) {}
+    },
+    _stepClass(step) {
+        if (step.status === 'active') return 'bg-blue-600 text-white border-2 border-blue-200 shadow-lg';
+        if (step.status === 'done') return 'bg-emerald-100 text-emerald-600 border border-emerald-200';
+        if (step.status === 'error') return 'bg-red-100 text-red-600 border border-red-200';
+        return 'bg-gray-100 border border-gray-300 text-gray-400';
+    },
+    _stepTextClass(step) {
+        if (step.status === 'active') return 'text-blue-600';
+        if (step.status === 'done') return 'text-emerald-600';
+        if (step.status === 'error') return 'text-red-600';
+        return 'text-gray-400';
+    },
+    _setPipelineState(state) {
+        this.pipelineSteps = this.pipelineSteps.map(s => ({ ...s, status: state }));
+    },
+    async triggerIngestionPipeline() {
+        this.ingestionError = '';
+        this.ingestionSuccess = '';
+        this.isIngestionSyncing = true;
+        this._setPipelineState('idle');
+        try {
+            for (let i = 0; i < this.pipelineSteps.length; i += 1) {
+                this.pipelineSteps[i].status = 'active';
+                await new Promise(r => setTimeout(r, 220));
+            }
+            const res = await fetch('/api/ingest/all', { method: 'POST' });
+            const data = await res.json();
+            if (!res.ok || !['success', 'partial'].includes(data.status)) {
+                throw new Error(data.message || 'Sync failed');
+            }
+            this.pipelineSteps = this.pipelineSteps.map(s => ({ ...s, status: 'done' }));
+            this.ingestionSuccess = `Sync completed (${data.status}): ${data.summary.total_records || 0} records processed.`;
+            await this.loadIngestionConnectors();
+            await this.refreshInsights();
+        } catch (e) {
+            for (let i = 0; i < this.pipelineSteps.length; i += 1) {
+                if (this.pipelineSteps[i].status === 'active') {
+                    this.pipelineSteps[i].status = 'error';
+                    break;
+                }
+            }
+            this.ingestionError = `Sync failed: ${e.message || e}`;
+        } finally {
+            this.isIngestionSyncing = false;
+        }
+    },
+    async triggerConnector(connectorKey) {
+        const routeMap = {
+            erp: '/api/ingest/erp',
+            email: '/api/ingest/email',
+            portal: '/api/ingest/portal',
+            pdf: '/api/ingest/pdf',
+            excel: '/api/ingest/excel'
+        };
+        const url = routeMap[connectorKey];
+        if (!url) return;
+        this.ingestionError = '';
+        this.ingestionSuccess = '';
+        try {
+            const res = await fetch(url, { method: 'POST' });
+            const data = await res.json();
+            if (!res.ok || data.status !== 'success') {
+                throw new Error(data.message || 'Connector run failed');
+            }
+            this.ingestionSuccess = `${connectorKey.toUpperCase()} sync complete (${data.records || 0} records).`;
+            await this.loadIngestionConnectors();
+            await this.refreshInsights();
+        } catch (e) {
+            this.ingestionError = `${connectorKey.toUpperCase()} sync failed: ${e.message || e}`;
+        }
+    },
+    exportReport() {
+        window.open(`/api/export/report?role=${encodeURIComponent(this.userRole || 'super')}`, '_blank');
+    },
+    formatLastSync(ts) {
+        if (!ts) return 'Never';
+        const d = new Date(ts.replace(' ', 'T'));
+        if (Number.isNaN(d.getTime())) return ts;
+        return d.toLocaleString();
+    },
+    formatVolume(connector) {
+        const n = Number(connector.volume || 0);
+        if ((connector.type || '').toUpperCase() === 'EMAIL') return `${n.toLocaleString('en-IN')} emails`;
+        if ((connector.type || '').toUpperCase() === 'FILE SYSTEM') return `${n.toLocaleString('en-IN')} files`;
+        if ((connector.type || '').toUpperCase() === 'SPREADSHEET') return `${n.toLocaleString('en-IN')} sheets`;
+        if ((connector.name || '').toLowerCase().includes('portal')) return `${n.toLocaleString('en-IN')} updates`;
+        return `${n.toLocaleString('en-IN')} records`;
+    },
+    logout() {
+        if (this.autoRefreshTimer) {
+            clearInterval(this.autoRefreshTimer);
+            this.autoRefreshTimer = null;
+        }
+        this.isLoggedIn = false;
+        this.loginPassword = '';
+        this.currentUserName = 'Guest';
+        this.currentUserId = '';
+        this.authError = '';
     }
 }">
     
@@ -79,24 +275,27 @@
                 <div class="text-xs text-blue-300 uppercase tracking-widest font-bold">KIT Hackathon Edition • TNI26184</div>
             </div>
             <div class="w-1/2 p-12 bg-gray-50">
-                <h2 class="text-xl font-bold text-gray-800 mb-8">Access Terminal</h2>
+                <h2 class="text-xl font-bold text-gray-800 mb-6">User Login</h2>
                 <div class="space-y-4">
-                    <button @click="login('export')" class="w-full flex items-center gap-4 p-4 bg-white border border-gray-200 rounded-lg hover:border-emerald-500 hover:bg-emerald-50 transition-all group">
-                        <div class="w-10 h-10 rounded bg-emerald-100 text-emerald-600 flex items-center justify-center group-hover:bg-emerald-600 group-hover:text-white"><i class="fas fa-plane-departure"></i></div>
-                        <div class="text-left font-semibold text-gray-700">Export Management Desk</div>
-                    </button>
-                    <button @click="login('import')" class="w-full flex items-center gap-4 p-4 bg-white border border-gray-200 rounded-lg hover:border-amber-500 hover:bg-amber-50 transition-all group">
-                        <div class="w-10 h-10 rounded bg-amber-100 text-amber-600 flex items-center justify-center group-hover:bg-amber-600 group-hover:text-white"><i class="fas fa-ship"></i></div>
-                        <div class="text-left font-semibold text-gray-700">Global Import Desk</div>
-                    </button>
-                    <button @click="login('domestic')" class="w-full flex items-center gap-4 p-4 bg-white border border-gray-200 rounded-lg hover:border-blue-500 hover:bg-blue-50 transition-all group">
-                        <div class="w-10 h-10 rounded bg-blue-100 text-blue-600 flex items-center justify-center group-hover:bg-blue-600 group-hover:text-white"><i class="fas fa-truck"></i></div>
-                        <div class="text-left font-semibold text-gray-700">Domestic Logistics Hub</div>
-                    </button>
-                    <button @click="login('super')" class="w-full flex items-center gap-4 p-4 bg-white border border-gray-200 rounded-lg hover:border-indigo-500 hover:bg-indigo-50 transition-all group">
-                        <div class="w-10 h-10 rounded bg-indigo-100 text-indigo-600 flex items-center justify-center group-hover:bg-indigo-600 group-hover:text-white"><i class="fas fa-shield-alt"></i></div>
-                        <div class="text-left font-semibold text-gray-700 font-bold">Port Authority (Super Access)</div>
-                    </button>
+                    <div>
+                        <label class="text-xs font-bold text-gray-500 uppercase">User ID</label>
+                        <input x-model="loginUserId" @keyup.enter="login()" type="text" placeholder="Enter user ID" class="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500">
+                    </div>
+                    <div>
+                        <label class="text-xs font-bold text-gray-500 uppercase">Password</label>
+                        <input x-model="loginPassword" @keyup.enter="login()" type="password" placeholder="Enter password" class="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500">
+                    </div>
+                    <button @click="login()" class="w-full bg-corp-blue text-white font-semibold py-2.5 rounded-lg hover:bg-blue-700 transition-colors">Sign In</button>
+                    <div x-show="authError" class="text-xs text-red-600 font-semibold" x-text="authError"></div>
+                    <div class="pt-2 border-t border-gray-200">
+                        <div class="text-[11px] uppercase font-bold text-gray-400 mb-2">Demo Credentials</div>
+                        <div class="text-xs text-gray-600 space-y-1">
+                            <div><span class="font-semibold">export_mgr</span> / export@123</div>
+                            <div><span class="font-semibold">import_desk</span> / import@123</div>
+                            <div><span class="font-semibold">logistics_lead</span> / domestic@123</div>
+                            <div><span class="font-semibold">port_admin</span> / super@123</div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -112,7 +311,7 @@
         <div class="flex-1 overflow-y-auto py-4">
             <div class="px-4 mb-2 text-xs font-bold text-gray-500 uppercase tracking-wider">Main</div>
             <div class="nav-item" :class="currentTab === 'dashboard' ? 'active' : ''" @click="currentTab = 'dashboard'"><i class="fas fa-chart-line w-4 text-center"></i> Dashboard</div>
-            <div class="nav-item" :class="currentTab === 'ingestion' ? 'active' : ''" @click="currentTab = 'ingestion'"><i class="fas fa-network-wired w-4 text-center"></i> Data Ingestion</div>
+            <div class="nav-item" :class="currentTab === 'ingestion' ? 'active' : ''" @click="currentTab = 'ingestion'; loadIngestionConnectors()"><i class="fas fa-network-wired w-4 text-center"></i> Data Ingestion</div>
             <div class="nav-item" :class="currentTab === 'erp' ? 'active' : ''" @click="currentTab = 'erp'"><i class="fas fa-database w-4 text-center"></i> ERP Data</div>
             <div class="nav-item"><i class="fas fa-file-invoice w-4 text-center"></i> Documents</div>
             
@@ -157,8 +356,8 @@
                     <span class="absolute -top-1 -right-1 w-2 h-2 bg-red-500 rounded-full"></span>
                 </i>
                 <div class="flex items-center gap-2 cursor-pointer border-l border-corp-border pl-5">
-                    <div class="w-8 h-8 rounded-full bg-corp-navy text-white flex items-center justify-center font-bold text-sm">JS</div>
-                    <span class="text-sm font-medium">John Smith</span>
+                    <div class="w-8 h-8 rounded-full bg-corp-navy text-white flex items-center justify-center font-bold text-sm" x-text="(currentUserName || 'Guest').split(' ').map(p => p[0]).join('').slice(0,2).toUpperCase()"></div>
+                    <span class="text-sm font-medium" x-text="currentUserName"></span>
                     <i class="fas fa-chevron-down text-xs text-corp-gray"></i>
                 </div>
             </div>
@@ -176,8 +375,8 @@
                         <p class="text-sm text-gray-500" x-show="userRole === 'export'">Tracking outgoing shipments and international manifests.</p>
                     </div>
                     <div class="flex gap-2 text-sm">
-                        <button @click="isLoggedIn = false" class="bg-white border border-red-200 text-red-600 px-3 py-1.5 rounded hover:bg-red-50 font-medium"><i class="fas fa-sign-out-alt mr-2"></i>Switch Desk</button>
-                        <button class="bg-corp-blue text-white px-3 py-1.5 rounded hover:bg-blue-700 font-medium"><i class="fas fa-download mr-2"></i>Export Report</button>
+                        <button @click="logout()" class="bg-white border border-red-200 text-red-600 px-3 py-1.5 rounded hover:bg-red-50 font-medium"><i class="fas fa-sign-out-alt mr-2"></i>Switch Desk</button>
+                        <button @click="exportReport()" class="bg-corp-blue text-white px-3 py-1.5 rounded hover:bg-blue-700 font-medium"><i class="fas fa-download mr-2"></i>Export Report</button>
                     </div>
                 </div>
 
@@ -186,30 +385,42 @@
                     <div class="bg-white p-4 rounded border border-corp-border enterprise-shadow" :class="userRole === 'export' || userRole === 'super' ? '' : 'opacity-40'">
                         <span class="text-[10px] font-bold text-emerald-600 uppercase tracking-widest">Active Exports</span>
                         <div class="flex items-end justify-between mt-2">
-                            <span class="text-2xl font-semibold text-corp-dark">412</span>
+                            <span class="text-2xl font-semibold text-corp-dark" x-text="insights.total_shipments"></span>
                             <i class="fas fa-plane-departure text-gray-200 text-xl"></i>
                         </div>
                     </div>
                     <div class="bg-white p-4 rounded border border-corp-border enterprise-shadow" :class="userRole === 'import' || userRole === 'super' ? '' : 'opacity-40'">
-                        <span class="text-[10px] font-bold text-amber-600 uppercase tracking-widest">Active Imports</span>
+                        <span class="text-[10px] font-bold text-amber-600 uppercase tracking-widest">Pending Shipments</span>
                         <div class="flex items-end justify-between mt-2">
-                            <span class="text-2xl font-semibold text-corp-dark">189</span>
+                            <span class="text-2xl font-semibold text-corp-dark" x-text="insights.pending_shipments"></span>
                             <i class="fas fa-ship text-gray-200 text-xl"></i>
                         </div>
                     </div>
                     <div class="bg-white p-4 rounded border border-corp-border enterprise-shadow" :class="userRole === 'domestic' || userRole === 'super' ? '' : 'opacity-40'">
-                        <span class="text-[10px] font-bold text-blue-600 uppercase tracking-widest">Domestic Hub</span>
+                        <span class="text-[10px] font-bold text-blue-600 uppercase tracking-widest">Trade Value (INR)</span>
                         <div class="flex items-end justify-between mt-2">
-                            <span class="text-2xl font-semibold text-corp-dark">647</span>
+                            <span class="text-2xl font-semibold text-corp-dark" x-text="Math.round(insights.total_value || 0).toLocaleString('en-IN')"></span>
                             <i class="fas fa-truck text-gray-200 text-xl"></i>
                         </div>
                     </div>
                     <div class="bg-white p-4 rounded border border-corp-border enterprise-shadow bg-gray-50" x-show="userRole === 'super'">
-                        <span class="text-[10px] font-bold text-indigo-600 uppercase tracking-widest">Port Utilization</span>
+                        <span class="text-[10px] font-bold text-indigo-600 uppercase tracking-widest">Avg Ticket (INR)</span>
                         <div class="flex items-end justify-between mt-2">
-                            <span class="text-2xl font-semibold text-corp-dark">82%</span>
+                            <span class="text-2xl font-semibold text-corp-dark" x-text="Math.round(insights.avg_ticket || 0).toLocaleString('en-IN')"></span>
                             <i class="fas fa-warehouse text-gray-200 text-xl"></i>
                         </div>
+                    </div>
+                </div>
+
+                <div class="bg-white border border-corp-border rounded enterprise-shadow p-4 mb-6" x-show="insights.top_routes && insights.top_routes.length">
+                    <h3 class="text-sm font-semibold text-corp-dark mb-2">DB Insights: Top Routes By Trade Value</h3>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+                        <template x-for="r in insights.top_routes" :key="r.route">
+                            <div class="border border-corp-border rounded p-3 bg-corp-light">
+                                <div class="font-semibold text-corp-dark" x-text="r.route"></div>
+                                <div class="text-corp-gray mt-1" x-text="'INR ' + Math.round(r.value || 0).toLocaleString('en-IN')"></div>
+                            </div>
+                        </template>
                     </div>
                 </div>
 
@@ -227,22 +438,12 @@
                         <div class="bg-white border border-corp-border rounded enterprise-shadow p-5 flex flex-col">
                             <h3 class="text-sm font-semibold text-corp-dark mb-4">Port Activity</h3>
                             <div class="flex-1 flex flex-col justify-center gap-3">
-                                <div class="flex justify-between items-center text-sm">
-                                    <span class="text-corp-gray">Chennai Port</span>
-                                    <div class="w-24 h-2 bg-corp-light rounded-full overflow-hidden"><div class="w-3/4 h-full bg-blue-500"></div></div>
-                                </div>
-                                <div class="flex justify-between items-center text-sm">
-                                    <span class="text-corp-gray">Singapore</span>
-                                    <div class="w-24 h-2 bg-corp-light rounded-full overflow-hidden"><div class="w-1/2 h-full bg-blue-500"></div></div>
-                                </div>
-                                <div class="flex justify-between items-center text-sm">
-                                    <span class="text-corp-gray">Dubai (Jebel Ali)</span>
-                                    <div class="w-24 h-2 bg-corp-light rounded-full overflow-hidden"><div class="w-2/5 h-full bg-blue-500"></div></div>
-                                </div>
-                                <div class="flex justify-between items-center text-sm">
-                                    <span class="text-corp-gray">Mundra Port</span>
-                                    <div class="w-24 h-2 bg-corp-light rounded-full overflow-hidden"><div class="w-1/4 h-full bg-blue-500"></div></div>
-                                </div>
+                                <template x-for="p in (insights.port_activity || [])" :key="p.port">
+                                    <div class="flex justify-between items-center text-sm">
+                                        <span class="text-corp-gray" x-text="p.port + ' (' + p.count + ')'">Port</span>
+                                        <div class="w-24 h-2 bg-corp-light rounded-full overflow-hidden"><div class="h-full bg-blue-500" :style="'width:' + (p.pct || 0) + '%' "></div></div>
+                                    </div>
+                                </template>
                             </div>
                         </div>
                     </div>
@@ -263,30 +464,20 @@
                             <th>Status</th>
                             <th class="text-right">Last Updated</th>
                         </tr>
-                        <tr class="table-row">
-                            <td class="font-medium text-blue-600">SBC-EXP-552</td>
-                            <td>TechCorp Industries</td>
-                            <td>Electronics Mfg Components</td>
-                            <td>Chennai → Dubai</td>
-                            <td><span class="bg-green-100 text-green-800 px-2 py-0.5 rounded text-xs font-semibold">Cleared</span></td>
-                            <td class="text-right text-corp-gray text-xs">2026-03-30</td>
-                        </tr>
-                        <tr class="table-row">
-                            <td class="font-medium text-blue-600">SBC-IMP-109</td>
-                            <td>Oceanic Importers</td>
-                            <td>Specialty Machinery</td>
-                            <td>Singapore → Chennai</td>
-                            <td><span class="bg-yellow-100 text-yellow-800 px-2 py-0.5 rounded text-xs font-semibold">Pending Customs</span></td>
-                            <td class="text-right text-corp-gray text-xs">2026-04-01</td>
-                        </tr>
-                        <tr class="table-row">
-                            <td class="font-medium text-blue-600">SDB-DOM-004</td>
-                            <td>Metro Retailers</td>
-                            <td>FMCG Goods</td>
-                            <td>Coimbatore → Chennai</td>
-                            <td><span class="bg-blue-100 text-blue-800 px-2 py-0.5 rounded text-xs font-semibold">In Transit</span></td>
-                            <td class="text-right text-corp-gray text-xs">2026-03-31</td>
-                        </tr>
+                        <template x-for="row in recentActivities.slice(0, 8)" :key="row.invoice_no + '-' + row.updated_at">
+                            <tr class="table-row">
+                                <td class="font-medium text-blue-600" x-text="row.invoice_no"></td>
+                                <td x-text="row.company"></td>
+                                <td x-text="row.product"></td>
+                                <td x-text="row.route"></td>
+                                <td>
+                                    <span class="px-2 py-0.5 rounded text-xs font-semibold"
+                                          :class="(row.status || '').toLowerCase().includes('clear') || (row.status || '').toLowerCase().includes('depart') || (row.status || '').toLowerCase().includes('complete') ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'"
+                                          x-text="row.status"></span>
+                                </td>
+                                <td class="text-right text-corp-gray text-xs" x-text="row.updated_at"></td>
+                            </tr>
+                        </template>
                     </table>
                 </div>
             </div>
@@ -316,10 +507,23 @@
                             <th>Post Date</th>
                             <th class="text-right">Valuation (INR)</th>
                         </tr>
-                        <!--ROWS_PLACEHOLDER-->
+                        <template x-for="t in transactions" :key="t.invoice_no">
+                            <tr class="table-row">
+                                <td class="font-medium text-blue-600" x-text="t.invoice_no"></td>
+                                <td x-text="t.client_name"></td>
+                                <td>
+                                    <span class="px-2 py-0.5 rounded text-xs font-semibold"
+                                          :class="(t.trade_type || '').toUpperCase() === 'EXPORT' ? 'bg-emerald-100 text-emerald-800' : ((t.trade_type || '').toUpperCase() === 'IMPORT' ? 'bg-amber-100 text-amber-800' : 'bg-blue-100 text-blue-800')"
+                                          x-text="t.trade_type || 'UNKNOWN'"></span>
+                                </td>
+                                <td x-text="t.item"></td>
+                                <td x-text="t.date"></td>
+                                <td class="text-right" x-text="'₹' + Math.round((Number(t.qty || 0) * Number(t.rate || 0))).toLocaleString('en-IN')"></td>
+                            </tr>
+                        </template>
                     </table>
                     <div class="p-3 border-t border-corp-border text-xs text-corp-gray flex justify-between items-center bg-gray-50">
-                        <span>Showing 1 to 5 of 14,204 records</span>
+                        <span x-text="'Showing ' + Math.min(transactions.length, 200) + ' records from DB'">Showing 0 records from DB</span>
                         <div class="flex gap-1">
                             <button class="px-2 py-1 border border-corp-border rounded bg-white text-corp-gray" disabled><i class="fas fa-chevron-left"></i></button>
                             <button class="px-2 py-1 border border-blue-600 rounded bg-blue-50 text-blue-600 font-bold">1</button>
@@ -340,75 +544,49 @@
                             <th>Clearance Status</th>
                             <th>Clearance Date</th>
                         </tr>
-                        <!--SHIPMENTS_PLACEHOLDER-->
+                        <template x-for="s in shipments" :key="s.shipping_bill_no">
+                            <tr class="table-row">
+                                <td class="font-medium text-blue-600" x-text="s.invoice_no"></td>
+                                <td x-text="s.shipping_bill_no"></td>
+                                <td x-text="s.port"></td>
+                                <td>
+                                    <span class="px-2 py-0.5 rounded text-xs font-semibold"
+                                          :class="(s.clearance_status || '').toLowerCase().includes('clear') || (s.clearance_status || '').toLowerCase().includes('depart') || (s.clearance_status || '').toLowerCase().includes('complete') ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'"
+                                          x-text="s.clearance_status"></span>
+                                </td>
+                                <td x-text="s.clearance_date"></td>
+                            </tr>
+                        </template>
                     </table>
                 </div>
             </div>
 
             <!-- VIEW: DATA INGESTION -->
             <div x-show="currentTab === 'ingestion'" style="display: none;" x-transition>
-                <div class="flex justify-between items-center mb-6" x-data="{ 
-                    isSyncing: false,
-                    async triggerSync() {
-                        this.isSyncing = true;
-                        try {
-                            const res = await fetch('/api/pipeline/sync', { method: 'POST' });
-                            const data = await res.json();
-                            alert('Data Lake Refreshed Successfully! ' + data.summary.total_records + ' records processed.');
-                            location.reload(); // Refresh to show new data
-                        } catch(e) {
-                            alert('Sync Failed: ' + e);
-                        } finally {
-                            this.isSyncing = false;
-                        }
-                    }
-                }">
+                <div class="flex justify-between items-center mb-6">
                     <h1 class="text-2xl font-semibold text-corp-dark tracking-tight">Data Ingestion Pipeline</h1>
-                    <button @click="triggerSync()" class="bg-white border border-corp-border text-corp-dark px-3 py-1.5 rounded hover:bg-corp-hover font-medium text-sm disabled:opacity-50" :disabled="isSyncing">
-                        <i class="fas fa-sync-alt mr-2 text-corp-gray" :class="isSyncing ? 'fa-spin' : ''"></i>
-                        <span x-text="isSyncing ? 'Syncing...' : 'Run Manual Sync'"></span>
+                    <button @click="triggerIngestionPipeline()" class="bg-white border border-corp-border text-corp-dark px-3 py-1.5 rounded hover:bg-corp-hover font-medium text-sm disabled:opacity-50" :disabled="isIngestionSyncing">
+                        <i class="fas fa-sync-alt mr-2 text-corp-gray" :class="isIngestionSyncing ? 'fa-spin' : ''"></i>
+                        <span x-text="isIngestionSyncing ? 'Syncing...' : 'Run Manual Sync'"></span>
                     </button>
                 </div>
+                <div x-show="ingestionError" class="mb-4 px-4 py-2 rounded border border-red-200 bg-red-50 text-sm text-red-700" x-text="ingestionError"></div>
+                <div x-show="ingestionSuccess" class="mb-4 px-4 py-2 rounded border border-emerald-200 bg-emerald-50 text-sm text-emerald-700" x-text="ingestionSuccess"></div>
 
                 <!-- Pipeline Status -->
                 <div class="bg-white border border-corp-border rounded enterprise-shadow p-6 mb-6">
                     <h3 class="text-sm font-semibold text-corp-dark mb-5 border-b border-gray-100 pb-2">Real-time ETL Processing</h3>
                     <div class="flex justify-between items-center px-4">
-                        <div class="flex flex-col items-center">
-                            <div class="w-10 h-10 rounded-full bg-blue-100 text-blue-600 border border-blue-200 flex items-center justify-center mb-2"><i class="fas fa-inbox"></i></div>
-                            <span class="text-xs font-semibold text-corp-dark">Collection</span>
-                            <span class="text-[10px] text-green-500 font-bold">● Active</span>
-                        </div>
-                        <div class="flex-1 h-0.5 bg-blue-500 mx-2"></div>
-                        <div class="flex flex-col items-center border border-transparent">
-                            <div class="w-10 h-10 rounded-full bg-blue-100 text-blue-600 border border-blue-200 flex items-center justify-center mb-2"><i class="fas fa-file-pdf"></i></div>
-                            <span class="text-xs font-semibold text-corp-dark">OCR/Parsing</span>
-                            <span class="text-[10px] text-green-500 font-bold">● Active</span>
-                        </div>
-                        <div class="flex-1 h-0.5 bg-blue-500 mx-2"></div>
-                        <div class="flex flex-col items-center">
-                            <div class="w-10 h-10 rounded-full bg-blue-100 text-blue-600 border border-blue-200 flex items-center justify-center mb-2"><i class="fas fa-brain"></i></div>
-                            <span class="text-xs font-semibold text-corp-dark">NLP Extraction</span>
-                            <span class="text-[10px] text-green-500 font-bold">● Active</span>
-                        </div>
-                        <div class="flex-1 h-0.5 bg-blue-500 mx-2 animate-pulse"></div>
-                        <div class="flex flex-col items-center">
-                            <div class="w-10 h-10 rounded-full bg-blue-600 text-white shadow-lg flex items-center justify-center mb-2 border-2 border-blue-200"><i class="fas fa-fingerprint animate-pulse"></i></div>
-                            <span class="text-xs font-semibold text-corp-dark">Entity Res (MDM)</span>
-                            <span class="text-[10px] text-blue-500 font-bold">Processing</span>
-                        </div>
-                        <div class="flex-1 h-0.5 bg-gray-200 mx-2"></div>
-                        <div class="flex flex-col items-center opacity-50">
-                            <div class="w-10 h-10 rounded-full bg-gray-100 border border-gray-300 text-gray-400 flex items-center justify-center mb-2"><i class="fas fa-database"></i></div>
-                            <span class="text-xs font-semibold text-corp-dark">DB Storage</span>
-                            <span class="text-[10px] text-gray-400 font-bold">Waiting</span>
-                        </div>
-                        <div class="flex-1 h-0.5 bg-gray-200 mx-2"></div>
-                        <div class="flex flex-col items-center opacity-50">
-                            <div class="w-10 h-10 rounded-full bg-gray-100 border border-gray-300 text-gray-400 flex items-center justify-center mb-2"><i class="fas fa-layer-group"></i></div>
-                            <span class="text-xs font-semibold text-corp-dark">Vector Indexing</span>
-                            <span class="text-[10px] text-gray-400 font-bold">Waiting</span>
-                        </div>
+                        <template x-for="(step, idx) in pipelineSteps" :key="step.key">
+                            <div class="flex items-center flex-1">
+                                <div class="flex flex-col items-center">
+                                    <div class="w-10 h-10 rounded-full flex items-center justify-center mb-2" :class="_stepClass(step)"><i class="fas" :class="step.icon + (step.status === 'active' ? ' animate-pulse' : '')"></i></div>
+                                    <span class="text-xs font-semibold text-corp-dark" x-text="step.label"></span>
+                                    <span class="text-[10px] font-bold" :class="_stepTextClass(step)" x-text="step.status === 'done' ? '● Done' : (step.status === 'active' ? '● Processing' : (step.status === 'error' ? '● Error' : '● Waiting'))"></span>
+                                </div>
+                                <div x-show="idx < pipelineSteps.length - 1" class="flex-1 h-0.5 mx-2" :class="step.status === 'done' ? 'bg-emerald-500' : (step.status === 'active' ? 'bg-blue-500 animate-pulse' : 'bg-gray-200')"></div>
+                            </div>
+                        </template>
                     </div>
                 </div>
 
@@ -426,46 +604,18 @@
                             <th>Volume (24h)</th>
                             <th class="text-center">Action</th>
                         </tr>
-                        <tr class="table-row">
-                            <td class="font-medium">ERP Database Sync (SAP)</td>
-                            <td><span class="border border-purple-200 bg-purple-50 text-purple-700 px-2 rounded text-[10px] font-bold">REST API</span></td>
-                            <td><span class="text-green-600 text-xs font-bold">● Connected</span></td>
-                            <td class="text-sm">2 mins ago</td>
-                            <td class="text-sm">4,502 records</td>
-                            <td class="text-center"><i class="fas fa-ellipsis-h text-corp-gray cursor-pointer"></i></td>
-                        </tr>
-                        <tr class="table-row">
-                            <td class="font-medium">Corporate IMAP Mailbox</td>
-                            <td><span class="border border-blue-200 bg-blue-50 text-blue-700 px-2 rounded text-[10px] font-bold">EMAIL</span></td>
-                            <td><span class="text-green-600 text-xs font-bold">● Connected</span></td>
-                            <td class="text-sm">5 mins ago</td>
-                            <td class="text-sm">115 emails</td>
-                            <td class="text-center"><i class="fas fa-ellipsis-h text-corp-gray cursor-pointer"></i></td>
-                        </tr>
-                        <tr class="table-row">
-                            <td class="font-medium">Regional Portals Tracker</td>
-                            <td><span class="border border-purple-200 bg-purple-50 text-purple-700 px-2 rounded text-[10px] font-bold">REST API</span></td>
-                            <td><span class="text-green-600 text-xs font-bold">● Connected</span></td>
-                            <td class="text-sm">15 mins ago</td>
-                            <td class="text-sm">82 updates</td>
-                            <td class="text-center"><i class="fas fa-ellipsis-h text-corp-gray cursor-pointer"></i></td>
-                        </tr>
-                        <tr class="table-row">
-                            <td class="font-medium">Customs PDF Directory Watch</td>
-                            <td><span class="border border-gray-200 bg-gray-50 text-gray-700 px-2 rounded text-[10px] font-bold">FILE SYSTEM</span></td>
-                            <td><span class="text-green-600 text-xs font-bold">● Connected</span></td>
-                            <td class="text-sm">1 hr ago</td>
-                            <td class="text-sm">14 files</td>
-                            <td class="text-center"><i class="fas fa-ellipsis-h text-corp-gray cursor-pointer"></i></td>
-                        </tr>
-                        <tr class="table-row">
-                            <td class="font-medium">Monthly Master Data Sheets</td>
-                            <td><span class="border border-green-200 bg-green-50 text-green-700 px-2 rounded text-[10px] font-bold">SPREADSHEET</span></td>
-                            <td><span class="text-yellow-600 text-xs font-bold">● Scheduled</span></td>
-                            <td class="text-sm">Yesterday</td>
-                            <td class="text-sm">1 file</td>
-                            <td class="text-center"><i class="fas fa-ellipsis-h text-corp-gray cursor-pointer"></i></td>
-                        </tr>
+                        <template x-for="c in ingestionConnectors" :key="c.key">
+                            <tr class="table-row">
+                                <td class="font-medium" x-text="c.name"></td>
+                                <td><span class="border px-2 rounded text-[10px] font-bold"
+                                          :class="(c.type || '').toUpperCase() === 'EMAIL' ? 'border-blue-200 bg-blue-50 text-blue-700' : ((c.type || '').toUpperCase() === 'SPREADSHEET' ? 'border-green-200 bg-green-50 text-green-700' : ((c.type || '').toUpperCase() === 'FILE SYSTEM' ? 'border-gray-200 bg-gray-50 text-gray-700' : 'border-purple-200 bg-purple-50 text-purple-700'))"
+                                          x-text="c.type"></span></td>
+                                <td><span class="text-xs font-bold" :class="(c.status || '').toLowerCase().includes('connect') ? 'text-green-600' : ((c.status || '').toLowerCase().includes('error') ? 'text-red-600' : 'text-yellow-600')" x-text="'● ' + (c.status || 'Unknown')"></span></td>
+                                <td class="text-sm" x-text="formatLastSync(c.last_sync)"></td>
+                                <td class="text-sm" x-text="formatVolume(c)"></td>
+                                <td class="text-center"><button @click="triggerConnector(c.key)" class="text-xs px-2 py-1 border border-corp-border rounded bg-white hover:bg-corp-hover font-semibold">Run</button></td>
+                            </tr>
+                        </template>
                     </table>
                 </div>
             </div>
@@ -1082,26 +1232,29 @@
 
     <!-- Chart Configuration Script -->
     <script>
-        document.addEventListener('alpine:initialized', () => {
-            // Wait brief moment for Alpine to render before chart init
-            setTimeout(async () => {
+        let activityChartInstance = null;
+        let productChartInstance = null;
+
+        async function initCharts() {
+            try {
+                const currentRole = (document.body.__x && document.body.__x.$data && document.body.__x.$data.userRole) || 'super';
+                const statsResp = await fetch(`/api/analytics/insights?role=${currentRole}`);
+                if (!statsResp.ok) return;
+                const stats = await statsResp.json();
+
                 const actCtx = document.getElementById('activityChart');
-                if(actCtx) {
-                    new Chart(actCtx.getContext('2d'), {
+                if (actCtx) {
+                    if (activityChartInstance) activityChartInstance.destroy();
+                    const monthly = stats.monthly || [];
+                    activityChartInstance = new Chart(actCtx.getContext('2d'), {
                         type: 'bar',
                         data: {
-                            labels: ['Nov', 'Dec', 'Jan', 'Feb', 'Mar', 'Apr (Proj)'],
+                            labels: monthly.map(m => m.month),
                             datasets: [
                                 {
-                                    label: 'Imports (INR x 1 Lakh)',
-                                    data: [12, 15, 11, 18, 22, 16],
+                                    label: 'Trade Value (INR x 1 Lakh)',
+                                    data: monthly.map(m => Math.round((Number(m.value || 0) / 100000) * 100) / 100),
                                     backgroundColor: '#0052cc',
-                                    borderRadius: 2
-                                },
-                                {
-                                    label: 'Exports (INR x 1 Lakh)',
-                                    data: [9, 11, 9.5, 13, 17.5, 22.5],
-                                    backgroundColor: '#00b8d9',
                                     borderRadius: 2
                                 }
                             ]
@@ -1109,28 +1262,24 @@
                         options: {
                             responsive: true,
                             maintainAspectRatio: false,
-                            plugins: { legend: { position: 'top', align: 'end', labels: { boxWidth: 10, usePointStyle: true, font: {family: '"IBM Plex Sans"', size: 12} } } },
-                            scales: { 
-                                y: { beginAtZero: true, grid: { color: '#ebecf0' }, border: {display: false} },
-                                x: { grid: { display: false }, border: {display: false} }
+                            plugins: { legend: { position: 'top', align: 'end', labels: { boxWidth: 10, usePointStyle: true, font: { family: '"IBM Plex Sans"', size: 12 } } } },
+                            scales: {
+                                y: { beginAtZero: true, grid: { color: '#ebecf0' }, border: { display: false } },
+                                x: { grid: { display: false }, border: { display: false } }
                             }
                         }
                     });
                 }
 
                 const prodCtx = document.getElementById('productsChart');
-                if(prodCtx) {
-                    // Access role from Alpine state if possible, or use a global
-                    const currentRole = document.body.__x.$data.userRole || 'super';
-                    const statsResp = await fetch(`/api/analytics/stats?role=${currentRole}`);
-                    const stats = await statsResp.json();
-                    
-                    new Chart(prodCtx.getContext('2d'), {
+                if (prodCtx) {
+                    if (productChartInstance) productChartInstance.destroy();
+                    productChartInstance = new Chart(prodCtx.getContext('2d'), {
                         type: 'doughnut',
                         data: {
-                            labels: stats.labels,
+                            labels: stats.labels || [],
                             datasets: [{
-                                data: stats.values,
+                                data: stats.values || [],
                                 backgroundColor: ['#0052cc', '#00b8d9', '#6554c0', '#ff991f', '#36b37e'],
                                 borderWidth: 0
                             }]
@@ -1139,14 +1288,15 @@
                             responsive: true,
                             maintainAspectRatio: false,
                             cutout: '70%',
-                            plugins: { legend: { position: 'right', labels: { boxWidth: 10, usePointStyle: true, font: {family: '"IBM Plex Sans"', size: 11} } } }
+                            plugins: { legend: { position: 'right', labels: { boxWidth: 10, usePointStyle: true, font: { family: '"IBM Plex Sans"', size: 11 } } } }
                         }
                     });
                 }
-                
-                // Truncate mermaid render delay
-                setTimeout(() => { mermaid.init(undefined, document.querySelectorAll('.mermaid')); }, 100);
-            }, 100);
+            } catch (_e) {}
+        }
+
+        document.addEventListener('alpine:initialized', () => {
+            setTimeout(() => { mermaid.init(undefined, document.querySelectorAll('.mermaid')); }, 200);
         });
 
         let map = null;

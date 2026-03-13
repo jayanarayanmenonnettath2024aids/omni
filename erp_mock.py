@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import List, Dict, Optional
@@ -6,18 +6,36 @@ import datetime
 from processing.ai_assistant import get_ai_response
 from processing.audit import run_audit
 from main import run_pipeline
-import sqlite3
 import os
 import httpx
 import glob
 import uuid
+import io
+import csv
 from dotenv import load_dotenv
 from ingestion.excel_ingest import ingest_excel
 from ingestion.pdf_ingest import extract_pdf_text_and_tables
 from ingestion.email_imap_ingest import ingest_unseen_emails
-from processing.transform import transform_excel_record, transform_pdf_record, transform_email_record
+from processing.transform import transform_excel_record, transform_pdf_record, transform_email_record, transform_erp_record, transform_portal_record
 from processing.mdm import apply_mdm
-from processing.database import save_to_data_lake, get_vector_db_stats
+from processing.database import (
+    init_db,
+    save_to_data_lake,
+    get_vector_db_stats,
+    seed_erp_transactions,
+    seed_portal_shipments,
+    seed_users,
+    authenticate_user,
+    register_user,
+    get_erp_transactions as db_get_erp_transactions,
+    get_portal_shipments as db_get_portal_shipments,
+    insert_order_transaction,
+    mirror_unified_to_erp_transactions,
+    get_dashboard_insights,
+    get_storage_status,
+    record_ingestion_run,
+    get_ingestion_connector_stats,
+)
 
 # Load environment variables from .env file
 load_dotenv()
@@ -39,6 +57,18 @@ class IngestRequest(BaseModel):
     file_glob: Optional[str] = None
     username: Optional[str] = None
     app_password: Optional[str] = None
+
+
+class LoginRequest(BaseModel):
+    user_id: str
+    password: str
+
+
+class RegisterRequest(BaseModel):
+    user_id: str
+    password: str
+    display_name: str
+    role: str = "domestic"
 
 # In-memory mock database
 MOCK_TRANSACTIONS = [
@@ -66,100 +96,76 @@ MOCK_SHIPMENTS = [
     {"invoice_no": "LOG-EXP-2026-014", "shipping_bill_no": "SBC-EXP-555", "port": "Chennai Port", "clearance_status": "Vessel Departed", "clearance_date": "2026-04-09"},
 ]
 
+APP_USERS = [
+    {"user_id": "export_mgr", "password": "export@123", "role": "export", "display_name": "Export Manager"},
+    {"user_id": "import_desk", "password": "import@123", "role": "import", "display_name": "Import Desk"},
+    {"user_id": "logistics_lead", "password": "domestic@123", "role": "domestic", "display_name": "Logistics Lead"},
+    {"user_id": "port_admin", "password": "super@123", "role": "super", "display_name": "Port Authority (Super)"},
+]
+
+
+@app.on_event("startup")
+def startup_seed_data():
+    init_db()
+    seed_erp_transactions(MOCK_TRANSACTIONS)
+    seed_portal_shipments(MOCK_SHIPMENTS)
+    seed_users(APP_USERS)
+
 @app.get("/", response_class=HTMLResponse)
 def erp_dashboard():
-    # Adding a couple more mock rows for better visual density
-    extended_transactions = MOCK_TRANSACTIONS + [
-        {
-            "invoice_no": "LOG-EXP-2026-008",
-            "client_name": "Nordic Solutions",
-            "gst_id": "33NORD9900F1Z4",
-            "item": "Auto Parts - 5 Containers",
-            "category": "Automotive",
-            "hs_code": "8708",
-            "qty": 5,
-            "rate": 45000,
-            "date": "2026-04-02",
-            "trade_type": "EXPORT",
-            "origin": "Chennai",
-            "destination": "Oslo",
-            "port": "Chennai Port",
-            "customs_duty": 0
-        },
-        {
-            "invoice_no": "LOG-INV-2026-009",
-            "client_name": "Reliance Retail",
-            "gst_id": "27REL1234F1Z9",
-            "item": "Apparel & Textiles",
-            "category": "Retail",
-            "hs_code": None,
-            "qty": 500,
-            "rate": 120,
-            "date": "2026-04-03",
-            "trade_type": "DOMESTIC",
-            "origin": "Surat",
-            "destination": "Bangalore",
-            "port": None,
-            "customs_duty": None
-        }
-    ]
-
-    # Generate table rows dynamically
-    rows = ""
-    for t in extended_transactions:
-        type_class = ""
-        if t['trade_type'] == "DOMESTIC":
-            type_class = "bg-blue-100 text-blue-800 border-blue-200"
-        elif t['trade_type'] == "EXPORT":
-            type_class = "bg-emerald-100 text-emerald-800 border-emerald-200"
-        else:
-            type_class = "bg-amber-100 text-amber-800 border-amber-200"
-
-        value = f"₹{(t['qty'] * t['rate']):,.2f}"
-        rows += f'''
-        <tr class="hover:bg-slate-50 transition-colors border-b border-slate-100">
-            <td class="py-4 px-6 text-sm font-semibold text-slate-800">{t['invoice_no']}</td>
-            <td class="py-4 px-6 text-sm text-slate-600 font-medium">{t['client_name']}</td>
-            <td class="py-4 px-6 text-sm"><span class="px-3 py-1 text-xs font-semibold rounded-full border {type_class}">{t['trade_type']}</span></td>
-            <td class="py-4 px-6 text-sm text-slate-600 truncate max-w-xs">{t['item']}</td>
-            <td class="py-4 px-6 text-sm text-slate-500">{t['date']}</td>
-            <td class="py-4 px-6 text-sm text-slate-800 font-medium text-right">{value}</td>
-            <td class="py-4 px-6 text-center text-slate-400 hover:text-indigo-600 cursor-pointer"><i class="fas fa-ellipsis-v"></i></td>
-        </tr>
-        '''
-        
-    shipment_rows = ""
-    for s in MOCK_SHIPMENTS:
-        status_color = "bg-emerald-100 text-emerald-800 border-emerald-200" if "Cleared" in s['clearance_status'] else "bg-amber-100 text-amber-800 border-amber-200"
-        icon = "fa-check-circle" if "Cleared" in s['clearance_status'] else "fa-clock"
-        shipment_rows += f'''
-        <tr class="hover:bg-slate-50 transition-colors border-b border-slate-100">
-            <td class="py-4 px-6 text-sm font-semibold text-slate-800">{s['invoice_no']}</td>
-            <td class="py-4 px-6 text-sm text-slate-600">{s['shipping_bill_no']}</td>
-            <td class="py-4 px-6 text-sm text-slate-600"><div class="flex items-center"><i class="fas fa-anchor text-slate-400 mr-2"></i>{s['port']}</div></td>
-            <td class="py-4 px-6 text-sm"><span class="px-3 py-1 text-xs font-semibold rounded-full border {status_color} flex items-center inline-flex"><i class="fas {icon} mr-1"></i>{s['clearance_status']}</span></td>
-            <td class="py-4 px-6 text-sm text-slate-500">{s['clearance_date']}</td>
-        </tr>
-        '''
-
     import os
     file_path = os.path.join(os.path.dirname(__file__), "dashboard.html")
     with open(file_path, "r", encoding="utf-8") as f:
         html_content = f.read()
-
-    # Inject the dynamic rows into the HTML template placeholders
-    html_content = html_content.replace("<!--ROWS_PLACEHOLDER-->", rows)
-    html_content = html_content.replace("<!--SHIPMENTS_PLACEHOLDER-->", shipment_rows)
-
     return html_content
+
+
+@app.get("/api/dashboard/data")
+def get_dashboard_data(role: str = Query("super"), tx_limit: int = Query(100), sh_limit: int = Query(100)):
+    transactions = db_get_erp_transactions()
+    role_norm = (role or "super").strip().lower()
+    if role_norm == "export":
+        transactions = [t for t in transactions if (t.get("trade_type") or "").upper() == "EXPORT"]
+    elif role_norm == "import":
+        transactions = [t for t in transactions if (t.get("trade_type") or "").upper() == "IMPORT"]
+    elif role_norm == "domestic":
+        transactions = [t for t in transactions if (t.get("trade_type") or "").upper() == "DOMESTIC"]
+
+    shipments = db_get_portal_shipments()
+    visible_invoices = {t.get("invoice_no") for t in transactions}
+    shipments = [s for s in shipments if s.get("invoice_no") in visible_invoices] if role_norm != "super" else shipments
+
+    insights = get_dashboard_insights(role)
+    return {
+        "transactions": transactions[: max(1, min(tx_limit, 500))],
+        "shipments": shipments[: max(1, min(sh_limit, 500))],
+        "insights": insights,
+    }
 
 @app.get("/erp/transactions")
 def get_transactions() -> List[Dict]:
-    return MOCK_TRANSACTIONS
+    return db_get_erp_transactions()
 
 @app.get("/portal/shipments")
 def get_portal_shipments() -> List[Dict]:
-    return MOCK_SHIPMENTS
+    return db_get_portal_shipments()
+
+
+@app.post("/api/auth/login")
+def api_login(req: LoginRequest):
+    user = authenticate_user(req.user_id, req.password)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid user ID or password")
+    return {"status": "success", **user}
+
+
+@app.post("/api/auth/register")
+def api_register(req: RegisterRequest):
+    result = register_user(req.user_id, req.password, req.role, req.display_name)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "Registration failed")
+    user = result["user"]
+    return {"status": "success", **user}
 
 @app.post("/api/ai/chat")
 def ai_chat(query: Dict):
@@ -170,34 +176,12 @@ def ai_chat(query: Dict):
 
 @app.get("/api/analytics/stats")
 def get_stats(role: str = "super"):
-    # Filter based on role
-    filtered_transactions = MOCK_TRANSACTIONS
-    if role == "export":
-        filtered_transactions = [t for t in MOCK_TRANSACTIONS if t['trade_type'] == "EXPORT"]
-    elif role == "import":
-        filtered_transactions = [t for t in MOCK_TRANSACTIONS if t['trade_type'] == "IMPORT"]
-    elif role == "domestic":
-        filtered_transactions = [t for t in MOCK_TRANSACTIONS if t['trade_type'] == "DOMESTIC"]
-        
-    product_counts = {}
-    for t in filtered_transactions:
-        # Simple parsing to get the base product name
-        item = t['item'].lower()
-        product = "Other"
-        if "laptop" in item: product = "Laptops"
-        elif "semiconductor" in item or "chip" in item: product = "Semiconductors"
-        elif "oil" in item: product = "Crude Oil"
-        elif "yarn" in item: product = "Yarn"
-        elif "spice" in item: product = "Spices"
-        
-        product_counts[product] = product_counts.get(product, 0) + (t['qty'] * t['rate'])
+    return get_dashboard_insights(role)
 
-    return {
-        "total_value": sum(product_counts.values()),
-        "distribution": product_counts,
-        "labels": list(product_counts.keys()),
-        "values": [round(v/100000, 2) for v in product_counts.values()] # In Lakhs
-    }
+
+@app.get("/api/analytics/insights")
+def get_insights(role: str = "super"):
+    return get_dashboard_insights(role)
 
 @app.post("/api/pipeline/sync")
 def trigger_sync():
@@ -207,6 +191,11 @@ def trigger_sync():
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
+
+@app.get("/api/ingestion/connectors")
+def ingestion_connectors():
+    return {"connectors": get_ingestion_connector_stats()}
+
 @app.get("/api/audit/report")
 def get_audit():
     # Run the pipeline to get the current state of the data lake
@@ -214,9 +203,9 @@ def get_audit():
     lake_summary = run_pipeline()
     # We need the actual records, not just summary. 
     # Let's modify main.py to optionally return the records or just mock the input for now
-    # For the sake of the demo, I'll use the MOCK_TRANSACTIONS and wrap them in the expected structure
+    # Build audit input from persisted DB records.
     formatted_data = []
-    for t in MOCK_TRANSACTIONS:
+    for t in db_get_erp_transactions():
         formatted_data.append({
             "invoice_no": t["invoice_no"],
             "source": "ERP",
@@ -230,7 +219,7 @@ def get_audit():
         })
 
     # Add portal shipment state records to improve anomaly and delay detection.
-    for s in MOCK_SHIPMENTS:
+    for s in db_get_portal_shipments():
         formatted_data.append({
             "invoice_no": s["invoice_no"],
             "source": "PORTAL",
@@ -324,24 +313,7 @@ async def text_to_speech(req: TTSRequest):
 
 @app.post("/api/order")
 def create_order(order: Order):
-    invoice_no = f"LOG-INV-{datetime.date.today().year}-00{len(MOCK_TRANSACTIONS) + 10}"
-    new_transaction = {
-        "invoice_no": invoice_no,
-        "client_name": order.client_name,
-        "gst_id": f"33{order.client_name[:4].upper().replace(' ', '')}9999F1Z1",
-        "item": order.item,
-        "category": "General Merchandise",
-        "hs_code": None,
-        "qty": order.qty,
-        "rate": order.rate,
-        "date": datetime.date.today().strftime("%Y-%m-%d"),
-        "trade_type": "DOMESTIC",
-        "origin": "Web Storefront",
-        "destination": "Client Location",
-        "port": None,
-        "customs_duty": None
-    }
-    MOCK_TRANSACTIONS.append(new_transaction)
+    invoice_no = insert_order_transaction(order.client_name, order.item, order.qty, order.rate)
     return {"status": "success", "invoice_no": invoice_no}
 
 
@@ -350,13 +322,39 @@ def vector_status():
     return get_vector_db_stats()
 
 
+@app.get("/api/storage/status")
+def storage_status():
+    return get_storage_status()
+
+
 @app.post("/api/ingest/excel")
 def trigger_excel_ingestion(req: IngestRequest = IngestRequest()):
     path = req.file_path or DEFAULT_EXCEL_PATH
     rows = ingest_excel(path)
     transformed = [apply_mdm(transform_excel_record(r)) for r in rows]
     save_to_data_lake(transformed, reset=False)
+    record_ingestion_run("excel", "Connected", len(transformed), f"File: {path}")
     return {"status": "success", "source": "EXCEL", "file": path, "records": len(transformed)}
+
+
+@app.post("/api/ingest/erp")
+def trigger_erp_ingestion():
+    rows = db_get_erp_transactions()
+    transformed = [apply_mdm(transform_erp_record(r)) for r in rows]
+    if transformed:
+        save_to_data_lake(transformed, reset=False)
+    record_ingestion_run("erp", "Connected", len(transformed), "Synced from ERP endpoint")
+    return {"status": "success", "source": "ERP", "records": len(transformed)}
+
+
+@app.post("/api/ingest/portal")
+def trigger_portal_ingestion():
+    rows = db_get_portal_shipments()
+    transformed = [apply_mdm(transform_portal_record(r)) for r in rows]
+    if transformed:
+        save_to_data_lake(transformed, reset=False)
+    record_ingestion_run("portal", "Connected", len(transformed), "Synced from portal endpoint")
+    return {"status": "success", "source": "PORTAL", "records": len(transformed)}
 
 
 @app.post("/api/ingest/pdf")
@@ -387,7 +385,7 @@ def trigger_pdf_ingestion(req: IngestRequest = IngestRequest()):
 
     if transformed:
         save_to_data_lake(transformed, reset=False)
-
+    record_ingestion_run("pdf", "Connected", len(transformed), f"Files scanned: {len(pdf_files)}")
     return {"status": "success", "source": "PDF", "files": len(pdf_files), "records": len(transformed)}
 
 
@@ -396,6 +394,7 @@ def trigger_email_ingestion(req: IngestRequest = IngestRequest()):
     username = req.username or os.getenv("EMAIL_USERNAME", "")
     app_password = req.app_password or os.getenv("EMAIL_APP_PASSWORD", "")
     if not username or not app_password:
+        record_ingestion_run("email", "Error", 0, "Missing email credentials")
         return {
             "status": "error",
             "source": "EMAIL",
@@ -406,6 +405,7 @@ def trigger_email_ingestion(req: IngestRequest = IngestRequest()):
     try:
         emails = ingest_unseen_emails(username, app_password)
     except Exception as e:
+        record_ingestion_run("email", "Error", 0, f"IMAP ingestion failed: {e}")
         return {
             "status": "error",
             "source": "EMAIL",
@@ -416,20 +416,74 @@ def trigger_email_ingestion(req: IngestRequest = IngestRequest()):
     transformed = [apply_mdm(transform_email_record(e)) for e in emails]
     if transformed:
         save_to_data_lake(transformed, reset=False)
+        mirror_unified_to_erp_transactions(transformed, default_trade_type="DOMESTIC")
+    record_ingestion_run("email", "Connected", len(transformed), "IMAP sync complete")
     return {"status": "success", "source": "EMAIL", "records": len(transformed)}
 
 
 @app.post("/api/ingest/all")
 def trigger_all_ingestion(req: IngestRequest = IngestRequest()):
+    erp_result = trigger_erp_ingestion()
+    portal_result = trigger_portal_ingestion()
     excel_result = trigger_excel_ingestion(req)
     pdf_result = trigger_pdf_ingestion(req)
     email_result = trigger_email_ingestion(req)
+    all_ok = all(r.get("status") == "success" for r in [erp_result, portal_result, excel_result, pdf_result, email_result])
     return {
-        "status": "success",
+        "status": "success" if all_ok else "partial",
+        "results": {
+            "erp": erp_result,
+            "portal": portal_result,
+            "excel": excel_result,
+            "pdf": pdf_result,
+            "email": email_result,
+        },
         "summary": {
+            "erp_records": erp_result.get("records", 0),
+            "portal_records": portal_result.get("records", 0),
             "excel_records": excel_result.get("records", 0),
             "pdf_records": pdf_result.get("records", 0),
             "email_records": email_result.get("records", 0),
-            "total_records": excel_result.get("records", 0) + pdf_result.get("records", 0) + email_result.get("records", 0),
+            "total_records": erp_result.get("records", 0) + portal_result.get("records", 0) + excel_result.get("records", 0) + pdf_result.get("records", 0) + email_result.get("records", 0),
         },
     }
+
+
+@app.get("/api/export/report")
+def export_report(role: str = "super"):
+    tx = db_get_erp_transactions()
+    if role == "export":
+        tx = [t for t in tx if (t.get("trade_type") or "").upper() == "EXPORT"]
+    elif role == "import":
+        tx = [t for t in tx if (t.get("trade_type") or "").upper() == "IMPORT"]
+    elif role == "domestic":
+        tx = [t for t in tx if (t.get("trade_type") or "").upper() == "DOMESTIC"]
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["invoice_no", "client_name", "trade_type", "item", "qty", "rate", "total_value", "date", "origin", "destination", "port"])
+    for t in tx:
+        qty = float(t.get("qty") or 0)
+        rate = float(t.get("rate") or 0)
+        writer.writerow([
+            t.get("invoice_no"),
+            t.get("client_name"),
+            t.get("trade_type"),
+            t.get("item"),
+            qty,
+            rate,
+            round(qty * rate, 2),
+            t.get("date"),
+            t.get("origin"),
+            t.get("destination"),
+            t.get("port"),
+        ])
+
+    csv_bytes = output.getvalue().encode("utf-8")
+    output.close()
+    filename = f"trade_report_{role}_{datetime.date.today().isoformat()}.csv"
+    return StreamingResponse(
+        iter([csv_bytes]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )

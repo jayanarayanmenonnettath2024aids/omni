@@ -161,7 +161,7 @@ def run_pipeline():
     print("\n[STEP 6] Persisting to SQL Data Lake...")
     init_db()
     save_to_data_lake(unified_data_lake)
-    print("[OK] Pipeline Complete. Data is now searchable in 'trade_data_lake.db'")
+    print("[OK] Pipeline Complete. Data persisted to SQL store and indexed in Chroma for RAG.")
     
     summary["total_records"] = len(unified_data_lake)
     return summary

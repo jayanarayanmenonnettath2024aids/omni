@@ -2,6 +2,8 @@ import imaplib
 import email
 import os
 import re
+from datetime import datetime
+import uuid
 from email.header import decode_header
 
 DOWNLOAD_FOLDER = "data/email_pdfs"
@@ -77,12 +79,51 @@ def ingest_unseen_emails(username, app_password):
                 else:
                     body = msg.get_payload(decode=True).decode(errors="ignore")
 
-                # Ignore marketing emails
-                if "invoice" not in subject.lower() and "invoice" not in body.lower():
+                lowered = f"{subject} {body}".lower()
+                business_keywords = [
+                    "invoice",
+                    "shipment",
+                    "export",
+                    "import",
+                    "local delivery",
+                    "arrival notice",
+                    "delivery confirmation",
+                ]
+                # Ignore unrelated emails
+                if not any(k in lowered for k in business_keywords):
                     continue
 
                 # Extract invoice data from body
                 invoice_data = extract_invoice_from_text(body)
+
+                # Fallback extraction for operational shipment notifications.
+                if not invoice_data:
+                    sender = (msg.get("From") or "unknown@local").split("<")[0].strip().strip('"')
+                    client_name = sender.split("@")[0].replace(".", " ").title() if "@" in sender else sender
+                    amount_match = re.search(r"(?:inr|rs\.?|amount)\s*[:\-]?\s*([0-9,]+(?:\.\d+)?)", lowered, re.IGNORECASE)
+                    amount_val = float(amount_match.group(1).replace(",", "")) if amount_match else 0.0
+                    date_match = re.search(r"(\d{4}[\-/]\d{2}[\-/]\d{2})", lowered)
+                    parsed_date = date_match.group(1).replace("/", "-") if date_match else datetime.now().strftime("%Y-%m-%d")
+
+                    subject_clean = re.sub(r"\s+", " ", subject).strip()
+                    prefix = "INV"
+                    s_low = subject_clean.lower()
+                    if "export" in s_low:
+                        prefix = "EXP"
+                    elif "import" in s_low or "arrival" in s_low:
+                        prefix = "IMP"
+                    elif "local" in s_low or "delivery" in s_low:
+                        prefix = "LOC"
+
+                    invoice_data = {
+                        "invoice_no": f"MAIL-{prefix}-{uuid.uuid4().hex[:8].upper()}",
+                        "client_name": client_name or "Email Client",
+                        "amount": amount_val,
+                        "date": parsed_date,
+                    }
+
+                invoice_data["subject"] = subject
+                invoice_data["body"] = body[:2000]
 
                 if invoice_data:
                     extracted_invoices.append(invoice_data)

@@ -6,3 +6,5 @@ thefuzz
 uvicorn
 python-dotenv
 httpx
+chromadb
+psycopg2-binary

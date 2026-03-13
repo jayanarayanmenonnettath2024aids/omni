@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useMemo } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { motion, useScroll, useTransform, useSpring } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { ArrowRight, Shield, Zap, Globe, Cpu } from 'lucide-react';
@@ -69,7 +69,7 @@ const Landing = () => {
                 const scale = Math.max(canvas.width / img.width, canvas.height / img.height);
                 const x = (canvas.width / 2) - (img.width / 2) * scale;
                 const y = (canvas.height / 2) - (img.height / 2) * scale;
-                
+
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
                 ctx.drawImage(img, x, y, img.width * scale, img.height * scale);
             }
@@ -97,8 +97,8 @@ const Landing = () => {
         <div ref={containerRef} className="relative bg-black" style={{ height: `${scrollHeight}px` }}>
             {/* Canvas Stickiness */}
             <div className="sticky top-0 h-screen w-full overflow-hidden">
-                <canvas 
-                    ref={canvasRef} 
+                <canvas
+                    ref={canvasRef}
                     className="w-full h-full object-cover pointer-events-none opacity-60"
                 />
                 <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-transparent to-black/80" />
@@ -114,7 +114,7 @@ const Landing = () => {
                         transition={{ duration: 1 }}
                         className="max-w-5xl"
                     >
-                        <span className="inline-block text-blue-500 font-black tracking-[0.3em] uppercase mb-6 text-sm">
+                        <span className="inline-block text-blue-500 font-black tracking-[0.3em] uppercase mb-6 text-sm mt-16">
                             Next-Generation Trade Intelligence
                         </span>
                         <h1 className="text-6xl md:text-8xl font-black text-white mb-8 tracking-tighter leading-none">
@@ -124,7 +124,7 @@ const Landing = () => {
                             Unified intelligence for the modern supply chain. Monitor, optimize, and scale your global operations with neural-powered visibility.
                         </p>
                         <div className="flex flex-col md:flex-row gap-6 justify-center">
-                            <button 
+                            <button
                                 onClick={() => navigate('/dashboard')}
                                 className="group bg-blue-600 hover:bg-blue-700 text-white px-10 py-5 rounded-2xl font-black uppercase tracking-widest transition-all hover:scale-105 active:scale-95 flex items-center justify-center gap-3 shadow-2xl shadow-blue-500/20"
                             >
@@ -140,7 +140,7 @@ const Landing = () => {
 
                 {/* Intelligence Section */}
                 <section className="h-screen flex items-center justify-center px-6">
-                    <motion.div 
+                    <motion.div
                         initial={{ opacity: 0, x: -50 }}
                         whileInView={{ opacity: 1, x: 0 }}
                         viewport={{ margin: "-20%" }}
@@ -160,7 +160,7 @@ const Landing = () => {
 
                 {/* Security Section */}
                 <section className="h-screen flex items-center justify-center px-6">
-                    <motion.div 
+                    <motion.div
                         initial={{ opacity: 0, scale: 0.9 }}
                         whileInView={{ opacity: 1, scale: 1 }}
                         transition={{ spring: { stiffness: 100, damping: 20 } }}
@@ -184,7 +184,7 @@ const Landing = () => {
                             whileInView={{ opacity: 1, y: 0 }}
                         >
                             <h2 className="text-7xl font-black text-white mb-12 tracking-tighter">READY TO <span className="text-blue-500">SCALE?</span></h2>
-                            <button 
+                            <button
                                 onClick={() => navigate('/dashboard')}
                                 className="bg-white text-black px-16 py-6 rounded-3xl font-black uppercase tracking-[0.2em] transform hover:scale-110 active:scale-95 transition-all shadow-[0_0_50px_rgba(255,255,255,0.2)]"
                             >
@@ -202,7 +202,7 @@ const Landing = () => {
             {!isLoaded && (
                 <div className="fixed inset-0 z-[100] bg-black flex flex-col items-center justify-center">
                     <div className="w-64 h-1 bg-white/10 rounded-full mb-4 overflow-hidden">
-                        <motion.div 
+                        <motion.div
                             className="h-full bg-blue-600"
                             initial={{ width: 0 }}
                             animate={{ width: "100%" }}

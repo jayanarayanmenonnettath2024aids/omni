@@ -1138,3 +1138,29 @@ def get_vector_db_stats():
             "status": "missing",
             "error": str(e),
         }
+
+
+def ensure_vector_sync_with_operational_data():
+    """
+    Ensure Chroma reflects operational ERP/portal records.
+    If vector count is lower than operational count, rebuild vector index.
+    """
+    operational_records = build_operational_vector_records()
+    operational_count = len(operational_records)
+    stats = get_vector_db_stats()
+    vector_count = int(stats.get("count") or 0)
+
+    rebuilt = False
+    indexed_records = vector_count
+    if operational_count > 0 and vector_count < operational_count:
+        indexed_records = sync_vector_from_operational_data(reset=True)
+        rebuilt = True
+        stats = get_vector_db_stats()
+
+    return {
+        **stats,
+        "operational_count": operational_count,
+        "in_sync": int(stats.get("count") or 0) >= operational_count,
+        "rebuilt": rebuilt,
+        "indexed_records": indexed_records,
+    }

@@ -37,6 +37,7 @@ from processing.database import (
     record_ingestion_run,
     get_ingestion_connector_stats,
     sync_vector_from_operational_data,
+    ensure_vector_sync_with_operational_data,
 )
 
 # Load environment variables from .env file
@@ -383,7 +384,7 @@ def create_order(order: Order):
 
 @app.get("/api/vector/status")
 def vector_status():
-    return get_vector_db_stats()
+    return ensure_vector_sync_with_operational_data()
 
 
 @app.post("/api/vector/rebuild")
@@ -395,7 +396,10 @@ def rebuild_vector_index():
 
 @app.get("/api/storage/status")
 def storage_status():
-    return get_storage_status()
+    status = get_storage_status()
+    # Keep storage status and vector DB state aligned with current operational records.
+    status["chroma"] = ensure_vector_sync_with_operational_data()
+    return status
 
 
 @app.post("/api/ingest/excel")

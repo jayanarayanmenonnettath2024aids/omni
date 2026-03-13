@@ -370,6 +370,76 @@ def _derive_shipment_left_answer(user_query: str, docs: List[str], mode: str, hi
     )
 
 
+def _derive_pending_imports_answer(user_query: str, docs: List[str], mode: str) -> str:
+    q = (user_query or "").lower().strip()
+    ta_pending_terms = ["பெண்டிங்", "நிலுவை", "பாக்கி"]
+    ta_import_terms = ["இம்போர்ட்", "இறக்குமதி"]
+    en_pending_import = ("pending" in q and ("import" in q or "imports" in q))
+    ta_pending_import = any(term in (user_query or "") for term in ta_pending_terms) and any(term in (user_query or "") for term in ta_import_terms)
+
+    if not (en_pending_import or ta_pending_import):
+        return ""
+
+    pending_tokens = ["awaiting", "pending", "in transit", "verification", "gate-in", "inspection", "not cleared"]
+    rows = []
+    for doc in docs or []:
+        text = str(doc or "")
+        lower = text.lower()
+        trade_match = re.search(r"trade type:\s*([^.]+)", text, re.IGNORECASE)
+        trade_type = (trade_match.group(1).strip().upper() if trade_match else "")
+        if trade_type != "IMPORT":
+            continue
+
+        clearance_match = re.search(r"clearance:\s*([^.]+)", text, re.IGNORECASE)
+        clearance = (clearance_match.group(1).strip() if clearance_match else "N/A")
+        if not any(token in clearance.lower() for token in pending_tokens):
+            continue
+
+        invoice_match = re.search(r"transaction\s+(\S+)", text, re.IGNORECASE)
+        route_match = re.search(r"route:\s*([^.]+)", text, re.IGNORECASE)
+        port_match = re.search(r"port:\s*([^.]+)", text, re.IGNORECASE)
+        value_match = re.search(r"value:\s*inr\s*([0-9,]+(?:\.\d+)?)", text, re.IGNORECASE)
+
+        rows.append(
+            {
+                "invoice": invoice_match.group(1) if invoice_match else "?",
+                "route": route_match.group(1).strip() if route_match else "N/A",
+                "port": port_match.group(1).strip() if port_match else "N/A",
+                "clearance": clearance,
+                "value": value_match.group(1) if value_match else "0",
+            }
+        )
+
+    if not rows:
+        if mode == "ta":
+            return "தற்போதைய context-இல் pending imports எதுவும் இல்லை."
+        if mode == "hi":
+            return "वर्तमान context में कोई pending import नहीं मिला।"
+        return "No pending import shipments were found in the current context."
+
+    if mode == "ta":
+        lines = [f"நிலுவையில் உள்ள இறக்குமதி பதிவுகள்: {len(rows)}"]
+        for row in rows[:8]:
+            lines.append(
+                f"- {row['invoice']}: {row['route']} | Port: {row['port']} | நிலை: {row['clearance']} | மதிப்பு: INR {row['value']}"
+            )
+        return "\n".join(lines)
+    if mode == "hi":
+        lines = [f"Pending imports: {len(rows)}"]
+        for row in rows[:8]:
+            lines.append(
+                f"- {row['invoice']}: {row['route']} | Port: {row['port']} | स्थिति: {row['clearance']} | मूल्य: INR {row['value']}"
+            )
+        return "\n".join(lines)
+
+    lines = [f"Pending imports found: {len(rows)}"]
+    for row in rows[:8]:
+        lines.append(
+            f"- {row['invoice']}: {row['route']} | Port: {row['port']} | Status: {row['clearance']} | Value: INR {row['value']}"
+        )
+    return "\n".join(lines)
+
+
 def _generate_llm_response(user_query: str, docs: List[str], mode: str, history: List[dict] = None) -> str:
     provider = os.getenv("LLM_PROVIDER", "openai-compatible").strip().lower()
     api_key = os.getenv("LLM_API_KEY", "").strip()
@@ -504,12 +574,15 @@ def get_ai_response(user_query, lang="en-IN", history=None):
         )
 
         exact_answer = _derive_reference_detail_answer(user_query or "", docs, mode)
+        pending_import_answer = _derive_pending_imports_answer(user_query or "", docs, mode)
         derived_answer = _derive_shipment_left_answer(user_query or "", docs, mode, history or [])
         if not derived_answer:
             derived_answer = _derive_trade_value_answer(user_query or "", docs, mode)
 
         if exact_answer:
             response = exact_answer
+        elif pending_import_answer:
+            response = pending_import_answer
         elif strict_trade_value_intent and derived_answer:
             response = derived_answer
         else:

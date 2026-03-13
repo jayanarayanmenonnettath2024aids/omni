@@ -6,6 +6,30 @@ const LANGUAGE_OPTIONS = [
   { code: 'ta-IN', label: 'Tamil' },
 ];
 
+const normalizeSpeechText = (text, langCode) => {
+  let normalized = String(text || '');
+  normalized = normalized
+    .replace(/\*\*/g, '')
+    .replace(/`/g, '')
+    .replace(/\s+\|\s+/g, ', ')
+    .replace(/\n+/g, '. ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+
+  // Make invoice/shipment IDs easier to hear by removing hard separators.
+  normalized = normalized.replace(/\b([A-Z0-9]+(?:-[A-Z0-9]+)+)\b/g, (full) => full.replace(/-/g, ' '));
+
+  // Convert INR marker to spoken currency words.
+  normalized = normalized.replace(/INR\s*([0-9,]+(?:\.\d+)?)/gi, (_m, amount) => {
+    if ((langCode || '').toLowerCase().startsWith('ta')) {
+      return `${amount} ரூபாய்`;
+    }
+    return `${amount} rupees`;
+  });
+
+  return normalized;
+};
+
 const Message = ({ role, content }) => {
   const isAI = role === 'ai';
   return (
@@ -122,6 +146,7 @@ const AIAssistantView = () => {
 
   const speakAnswer = async (text) => {
     if (!text?.trim()) return;
+    const speechText = normalizeSpeechText(text, selectedLangRef.current);
 
     if (audioRef.current) {
       try {
@@ -140,7 +165,7 @@ const AIAssistantView = () => {
       const response = await fetch('/api/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, lang: selectedLangRef.current }),
+        body: JSON.stringify({ text: speechText, lang: selectedLangRef.current }),
       });
 
       if (!response.ok) {

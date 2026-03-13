@@ -9,6 +9,9 @@ import LoginOverlay from '../components/LoginOverlay';
 import ERPDataView from '../components/ERPDataView';
 import IngestionView from '../components/IngestionView';
 import AIAssistantView from '../components/AIAssistantView';
+import MasterDataView from '../components/MasterDataView';
+import TradeMapView from '../components/TradeMapView';
+import OperationsView from '../components/OperationsView';
 
 const formatCurrencyCompact = (value) => new Intl.NumberFormat('en-IN', {
   notation: 'compact',
@@ -367,6 +370,22 @@ const Dashboard = () => {
         return <IngestionView />;
       case 'ai':
         return <AIAssistantView />;
+      case 'documents':
+        return <MasterDataView view="documents" />;
+      case 'companies':
+        return <MasterDataView view="companies" />;
+      case 'shipments':
+        return <MasterDataView view="shipments" />;
+      case 'map':
+        return <TradeMapView userRole={userRole} />;
+      case 'products':
+        return <OperationsView view="products" dashboardData={dashboardData} userRole={userRole} />;
+      case 'analytics':
+        return <OperationsView view="analytics" dashboardData={dashboardData} userRole={userRole} />;
+      case 'reports':
+        return <OperationsView view="reports" dashboardData={dashboardData} userRole={userRole} />;
+      case 'admin':
+        return <OperationsView view="admin" dashboardData={dashboardData} userRole={userRole} />;
       default:
         return <div className="text-center py-20 text-gray-400 font-bold uppercase tracking-widest">View Under Development</div>;
     }

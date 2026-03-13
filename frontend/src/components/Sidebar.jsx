@@ -34,24 +34,24 @@ const Sidebar = ({ currentTab, setTab, userRole }) => {
         <NavItem icon={LayoutDashboard} label="Dashboard" active={currentTab === 'dashboard'} onClick={() => setTab('dashboard')} />
         <NavItem icon={Network} label="Data Ingestion" active={currentTab === 'ingestion'} onClick={() => setTab('ingestion')} />
         <NavItem icon={Database} label="ERP Data" active={currentTab === 'erp'} onClick={() => setTab('erp')} />
-        <NavItem icon={FileText} label="Documents" />
+        <NavItem icon={FileText} label="Documents" active={currentTab === 'documents'} onClick={() => setTab('documents')} />
         
         <div className="px-5 mb-2 mt-6 text-xs font-bold text-gray-500 uppercase tracking-widest">Master Data</div>
-        <NavItem icon={Building2} label="Companies" />
-        <NavItem icon={Ship} label="Shipments" />
+        <NavItem icon={Building2} label="Companies" active={currentTab === 'companies'} onClick={() => setTab('companies')} />
+        <NavItem icon={Ship} label="Shipments" active={currentTab === 'shipments'} onClick={() => setTab('shipments')} />
         <NavItem icon={Globe} label="Trade Map" active={currentTab === 'map'} onClick={() => setTab('map')} />
-        <NavItem icon={Box} label="Products" />
+        <NavItem icon={Box} label="Products" active={currentTab === 'products'} onClick={() => setTab('products')} />
         
         <div className="px-5 mb-2 mt-6 text-xs font-bold text-gray-500 uppercase tracking-widest">Intelligence</div>
         <NavItem icon={Bot} label="AI Assistant" active={currentTab === 'ai'} onClick={() => setTab('ai')} badge="BETA" />
         {userRole === 'super' && (
           <NavItem icon={Microscope} label="Audit Control" active={currentTab === 'audit'} onClick={() => setTab('audit')} />
         )}
-        <NavItem icon={PieChart} label="Trade Analytics" />
-        <NavItem icon={FileSearch} label="Reports" />
+        <NavItem icon={PieChart} label="Trade Analytics" active={currentTab === 'analytics'} onClick={() => setTab('analytics')} />
+        <NavItem icon={FileSearch} label="Reports" active={currentTab === 'reports'} onClick={() => setTab('reports')} />
 
         <div className="px-5 mb-2 mt-6 text-xs font-bold text-gray-500 uppercase tracking-widest">System</div>
-        <NavItem icon={Settings} label="Admin Settings" />
+        <NavItem icon={Settings} label="Admin Settings" active={currentTab === 'admin'} onClick={() => setTab('admin')} />
       </div>
     </aside>
   );

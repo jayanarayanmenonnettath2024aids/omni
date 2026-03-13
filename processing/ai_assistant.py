@@ -83,6 +83,109 @@ def _expand_query_variants(user_query: str) -> List[str]:
     return deduped or [q]
 
 
+def _extract_reference_tokens(user_query: str) -> List[str]:
+    text = str(user_query or "").upper()
+    patterns = [
+        r"\bLOG-(?:EXP|IMP|INV)-\d{4}-[A-Z0-9]+\b",
+        r"\bMAIL-(?:EXP|IMP|LOC)-[A-Z0-9]+\b",
+        r"\bPDF-[A-Z0-9]+\b",
+    ]
+    refs = []
+    for pattern in patterns:
+        refs.extend(re.findall(pattern, text))
+    seen = set()
+    ordered = []
+    for ref in refs:
+        if ref not in seen:
+            ordered.append(ref)
+            seen.add(ref)
+    return ordered
+
+
+def _fetch_exact_reference_context(collection, user_query: str):
+    docs = []
+    metas = []
+    for ref in _extract_reference_tokens(user_query):
+        try:
+            result = collection.get(where={"invoice_no": ref}, include=["documents", "metadatas"])
+        except Exception:
+            continue
+
+        for doc in result.get("documents", []) or []:
+            if doc and doc not in docs:
+                docs.append(doc)
+        for meta in result.get("metadatas", []) or []:
+            metas.append(meta or {})
+    return docs, metas
+
+
+def _parse_vector_doc(doc: str) -> dict:
+    text = str(doc or "")
+    def extract(pattern: str, default: str = "N/A"):
+        match = re.search(pattern, text, re.IGNORECASE)
+        return match.group(1).strip() if match else default
+
+    return {
+        "invoice": extract(r"Transaction\s+(\S+)"),
+        "customer": extract(r"by\s+(.+?)\.\s+Item:"),
+        "item": extract(r"Item:\s+(.+?)\.\s+Trade type:"),
+        "trade_type": extract(r"Trade type:\s+(.+?)\.\s+Route:"),
+        "route": extract(r"Route:\s+(.+?)\.\s+Port:"),
+        "port": extract(r"Port:\s+(.+?)\.\s+Clearance:"),
+        "clearance": extract(r"Clearance:\s+(.+?)\.\s+Value:"),
+        "value": extract(r"Value:\s+INR\s+(.+?)\.\s+Source:"),
+        "source": extract(r"Source:\s+(.+?)\.?$"),
+    }
+
+
+def _derive_reference_detail_answer(user_query: str, docs: List[str], mode: str) -> str:
+    refs = _extract_reference_tokens(user_query)
+    if not refs:
+        return ""
+
+    target = refs[0]
+    match = next((doc for doc in docs if target in str(doc or "")), None)
+    if not match:
+        return ""
+
+    parsed = _parse_vector_doc(match)
+    if mode == "ta":
+        return (
+            f"{target} பற்றிய விவரம்:\n"
+            f"- வாடிக்கையாளர்: {parsed['customer']}\n"
+            f"- பொருள்: {parsed['item']}\n"
+            f"- வகை: {parsed['trade_type']}\n"
+            f"- பாதை: {parsed['route']}\n"
+            f"- துறைமுகம்: {parsed['port']}\n"
+            f"- கிளியரன்ஸ் நிலை: {parsed['clearance']}\n"
+            f"- மதிப்பு: INR {parsed['value']}\n"
+            f"- மூல அமைப்பு: {parsed['source']}"
+        )
+    if mode == "hi":
+        return (
+            f"{target} का विवरण:\n"
+            f"- ग्राहक: {parsed['customer']}\n"
+            f"- आइटम: {parsed['item']}\n"
+            f"- प्रकार: {parsed['trade_type']}\n"
+            f"- रूट: {parsed['route']}\n"
+            f"- पोर्ट: {parsed['port']}\n"
+            f"- क्लीयरेंस स्थिति: {parsed['clearance']}\n"
+            f"- मूल्य: INR {parsed['value']}\n"
+            f"- स्रोत: {parsed['source']}"
+        )
+    return (
+        f"Details for {target}:\n"
+        f"- Customer: {parsed['customer']}\n"
+        f"- Item: {parsed['item']}\n"
+        f"- Trade Type: {parsed['trade_type']}\n"
+        f"- Route: {parsed['route']}\n"
+        f"- Port: {parsed['port']}\n"
+        f"- Clearance Status: {parsed['clearance']}\n"
+        f"- Value: INR {parsed['value']}\n"
+        f"- Source: {parsed['source']}"
+    )
+
+
 def _extract_trade_rows(docs: List[str]) -> List[dict]:
     rows = []
     for d in docs or []:
@@ -360,6 +463,8 @@ def get_ai_response(user_query, lang="en-IN", history=None):
         collection = client.get_collection(name="trade_knowledge_base", embedding_function=sentence_transformer_ef)
         mode = _detect_lang_mode(user_query or "", lang or "en-IN")
 
+        exact_docs, exact_metas = _fetch_exact_reference_context(collection, user_query or "")
+
         query_variants = _expand_query_variants(user_query or "")
         results = collection.query(query_texts=query_variants, n_results=4)
 
@@ -369,6 +474,15 @@ def get_ai_response(user_query, lang="en-IN", history=None):
         docs = []
         metas = []
         seen_docs = set()
+
+        for index, doc in enumerate(exact_docs):
+            norm = re.sub(r"\s+", " ", str(doc or "")).strip().lower()
+            if not norm or norm in seen_docs:
+                continue
+            seen_docs.add(norm)
+            docs.append(doc)
+            metas.append(exact_metas[index] if index < len(exact_metas) else {})
+
         for i, docs_for_variant in enumerate(raw_docs):
             metas_for_variant = raw_metas[i] if i < len(raw_metas) else []
             for j, doc in enumerate(docs_for_variant or []):
@@ -389,11 +503,14 @@ def get_ai_response(user_query, lang="en-IN", history=None):
             and any(k in q_norm for k in ["month", "this month", "மாச", "மாத", "मही", "माह"])
         )
 
+        exact_answer = _derive_reference_detail_answer(user_query or "", docs, mode)
         derived_answer = _derive_shipment_left_answer(user_query or "", docs, mode, history or [])
         if not derived_answer:
             derived_answer = _derive_trade_value_answer(user_query or "", docs, mode)
 
-        if strict_trade_value_intent and derived_answer:
+        if exact_answer:
+            response = exact_answer
+        elif strict_trade_value_intent and derived_answer:
             response = derived_answer
         else:
             response = derived_answer or _generate_llm_response(user_query or "", docs, mode, history or [])

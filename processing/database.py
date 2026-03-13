@@ -942,6 +942,114 @@ def get_ingestion_connector_stats():
         )
     return result
 
+
+def build_operational_vector_records():
+    transactions = get_erp_transactions()
+    shipments = get_portal_shipments()
+
+    shipments_by_invoice = {}
+    for shipment in shipments:
+        invoice_no = shipment.get("invoice_no")
+        if not invoice_no:
+            continue
+        shipments_by_invoice.setdefault(invoice_no, []).append(shipment)
+
+    records = []
+    seen_invoices = set()
+
+    for transaction in transactions:
+        invoice_no = transaction.get("invoice_no")
+        if not invoice_no:
+            continue
+
+        seen_invoices.add(invoice_no)
+        quantity = float(transaction.get("qty") or 0)
+        rate = float(transaction.get("rate") or 0)
+        total_value = quantity * rate
+        shipment = (shipments_by_invoice.get(invoice_no) or [None])[0] or {}
+
+        records.append(
+            {
+                "invoice_no": invoice_no,
+                "date": transaction.get("date"),
+                "source": "ERP",
+                "trade_type": transaction.get("trade_type") or "UNKNOWN",
+                "customer": {
+                    "name": transaction.get("client_name") or "N/A",
+                    "gst_number": transaction.get("gst_id"),
+                },
+                "product": {
+                    "name": transaction.get("item") or "N/A",
+                    "category": transaction.get("category") or "Other",
+                    "hs_code": transaction.get("hs_code"),
+                },
+                "shipment": {
+                    "product_description": transaction.get("item") or "N/A",
+                    "quantity": quantity,
+                    "origin_location": transaction.get("origin") or "N/A",
+                    "destination_location": transaction.get("destination") or "N/A",
+                    "route": f"{transaction.get('origin') or 'N/A'} -> {transaction.get('destination') or 'N/A'}",
+                    "port": shipment.get("port") or transaction.get("port") or "N/A",
+                    "clearance_status": shipment.get("clearance_status") or "N/A",
+                    "customs_duty": transaction.get("customs_duty"),
+                },
+                "transaction": {
+                    "quantity": quantity,
+                    "unit_price": rate,
+                    "total_value": total_value,
+                    "transaction_date": transaction.get("date"),
+                    "trade_type": transaction.get("trade_type") or "UNKNOWN",
+                },
+                "financials": {
+                    "rate": rate,
+                    "total_value": total_value,
+                },
+            }
+        )
+
+    for shipment in shipments:
+        invoice_no = shipment.get("invoice_no") or shipment.get("shipping_bill_no")
+        if not invoice_no or invoice_no in seen_invoices:
+            continue
+
+        records.append(
+            {
+                "invoice_no": invoice_no,
+                "date": shipment.get("clearance_date") or datetime.now().strftime("%Y-%m-%d"),
+                "source": "PORTAL",
+                "trade_type": "UNKNOWN",
+                "customer": {"name": "N/A"},
+                "product": {"name": "N/A", "category": "Unknown"},
+                "shipment": {
+                    "product_description": "Portal Shipment",
+                    "quantity": 0,
+                    "origin_location": "N/A",
+                    "destination_location": shipment.get("port") or "N/A",
+                    "route": shipment.get("port") or "N/A",
+                    "port": shipment.get("port") or "N/A",
+                    "clearance_status": shipment.get("clearance_status") or "N/A",
+                },
+                "transaction": {
+                    "quantity": 0,
+                    "unit_price": 0,
+                    "total_value": 0,
+                    "transaction_date": shipment.get("clearance_date") or datetime.now().strftime("%Y-%m-%d"),
+                    "trade_type": "UNKNOWN",
+                },
+                "financials": {"rate": 0, "total_value": 0},
+            }
+        )
+
+    return records
+
+
+def sync_vector_from_operational_data(reset=True):
+    records = build_operational_vector_records()
+    if not records:
+        return 0
+    save_to_vector_db(records, reset=reset)
+    return len(records)
+
 # --- VECTOR DB LAYER (CHROMA DB FOR RAG) ---
 def save_to_vector_db(records, reset=True):
     try:

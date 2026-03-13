@@ -12,12 +12,11 @@ class Order(BaseModel):
     qty: int
     rate: float
 
-@app.get("/", response_class=HTMLResponse)
+from fastapi.responses import RedirectResponse
+
+@app.get("/")
 def storefront():
-    file_path = os.path.join(os.path.dirname(__file__), "storefront.html")
-    with open(file_path, "r", encoding="utf-8") as f:
-        html_content = f.read()
-    return html_content
+    return RedirectResponse(url="http://127.0.0.1:8000/store")
 
 @app.post("/api/order")
 def checkout(order: Order):

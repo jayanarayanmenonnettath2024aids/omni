@@ -1,5 +1,6 @@
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, UploadFile, File
 from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import List, Dict, Optional
 import datetime
@@ -35,6 +36,7 @@ from processing.database import (
     get_storage_status,
     record_ingestion_run,
     get_ingestion_connector_stats,
+    sync_vector_from_operational_data,
 )
 
 # Load environment variables from .env file
@@ -42,8 +44,17 @@ load_dotenv()
 
 app = FastAPI()
 
-DEFAULT_EXCEL_PATH = "data/logistics_shipments.xlsx"
-DEFAULT_PDF_GLOB = "data/*.pdf"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_EXCEL_PATH = os.path.join(BASE_DIR, "data", "logistics_shipments.xlsx")
+DEFAULT_PDF_GLOB = os.path.join(BASE_DIR, "data", "*.pdf")
+UPLOAD_DIR = os.path.join(BASE_DIR, "data", "uploads")
+
+
+def resolve_repo_path(path_value: Optional[str], default_value: str) -> str:
+    candidate = (path_value or default_value).strip() if path_value else default_value
+    if os.path.isabs(candidate):
+        return candidate
+    return os.path.join(BASE_DIR, candidate)
 
 class Order(BaseModel):
     client_name: str
@@ -103,6 +114,49 @@ APP_USERS = [
     {"user_id": "port_admin", "password": "super@123", "role": "super", "display_name": "Port Authority (Super)"},
 ]
 
+MORE_MOCK_TRANSACTIONS = [
+    {"invoice_no": "LOG-EXP-2026-021", "client_name": "Apex Marine Exports", "gst_id": "33APEX8822F1Z1", "item": "Marine Pumps", "category": "Machinery", "hs_code": "8413", "qty": 40, "rate": 185000, "date": "2026-04-11", "trade_type": "EXPORT", "origin": "Chennai", "destination": "Rotterdam", "port": "Chennai Port", "customs_duty": 0},
+    {"invoice_no": "LOG-IMP-2026-022", "client_name": "Nano Circuit Labs", "gst_id": "29NANO2244F1Z8", "item": "Semiconductor Wafers", "category": "Electronics", "hs_code": "8542", "qty": 650, "rate": 7200, "date": "2026-04-11", "trade_type": "IMPORT", "origin": "Japan", "destination": "Hyderabad Air Cargo", "port": "Hyderabad Airport", "customs_duty": 830000},
+    {"invoice_no": "LOG-INV-2026-023", "client_name": "Southern Retail Grid", "gst_id": "33SOUT1122F1Z7", "item": "Warehouse Servers", "category": "Electronics", "hs_code": "8471", "qty": 18, "rate": 98000, "date": "2026-04-11", "trade_type": "DOMESTIC", "origin": "Bangalore", "destination": "Madurai", "port": None, "customs_duty": None},
+    {"invoice_no": "LOG-EXP-2026-024", "client_name": "Blue River Textiles", "gst_id": "33BLUE0033F1Z4", "item": "Organic Cotton Yarn", "category": "Textiles", "hs_code": "5205", "qty": 250, "rate": 1450, "date": "2026-04-12", "trade_type": "EXPORT", "origin": "Tiruppur", "destination": "Barcelona", "port": "Tuticorin Port", "customs_duty": 0},
+    {"invoice_no": "LOG-IMP-2026-025", "client_name": "Urban Energy Grid", "gst_id": "27URBA7711F1Z6", "item": "Industrial Batteries", "category": "Energy", "hs_code": "8507", "qty": 90, "rate": 56000, "date": "2026-04-12", "trade_type": "IMPORT", "origin": "Germany", "destination": "Mumbai", "port": "Nhava Sheva", "customs_duty": 510000},
+    {"invoice_no": "LOG-INV-2026-026", "client_name": "Coastal Spice House", "gst_id": "32COAS5511F1Z1", "item": "Processed Spices", "category": "Agriculture", "hs_code": "0910", "qty": 350, "rate": 620, "date": "2026-04-12", "trade_type": "DOMESTIC", "origin": "Kochi", "destination": "Hyderabad", "port": None, "customs_duty": None},
+    {"invoice_no": "LOG-EXP-2026-027", "client_name": "Skyline Aero Parts", "gst_id": "29SKYL1188F1Z2", "item": "Aero Fasteners", "category": "Machinery", "hs_code": "7318", "qty": 1200, "rate": 980, "date": "2026-04-13", "trade_type": "EXPORT", "origin": "Bangalore", "destination": "Singapore", "port": "Chennai Port", "customs_duty": 0},
+    {"invoice_no": "LOG-IMP-2026-028", "client_name": "Delta Precision Works", "gst_id": "33DELT0099F1Z9", "item": "CNC Tooling", "category": "Machinery", "hs_code": "8207", "qty": 140, "rate": 42000, "date": "2026-04-13", "trade_type": "IMPORT", "origin": "Italy", "destination": "Chennai", "port": "Chennai Port", "customs_duty": 680000},
+    {"invoice_no": "LOG-INV-2026-029", "client_name": "Metro Med Devices", "gst_id": "33METM6633F1Z5", "item": "Medical Sensors", "category": "Electronics", "hs_code": "9027", "qty": 240, "rate": 8400, "date": "2026-04-13", "trade_type": "DOMESTIC", "origin": "Pune", "destination": "Chennai", "port": None, "customs_duty": None},
+    {"invoice_no": "LOG-EXP-2026-030", "client_name": "Evergreen Agro World", "gst_id": "29EVER2211F1Z3", "item": "Dry Red Chillies", "category": "Agriculture", "hs_code": "0904", "qty": 480, "rate": 520, "date": "2026-04-13", "trade_type": "EXPORT", "origin": "Guntur", "destination": "Doha", "port": "Krishnapatnam Port", "customs_duty": 0},
+    {"invoice_no": "LOG-IMP-2026-031", "client_name": "Prime Auto Hub", "gst_id": "27PRIM9009F1Z7", "item": "EV Drivetrain Modules", "category": "Machinery", "hs_code": "8708", "qty": 70, "rate": 89000, "date": "2026-04-14", "trade_type": "IMPORT", "origin": "South Korea", "destination": "Chennai", "port": "Chennai Port", "customs_duty": 730000},
+    {"invoice_no": "LOG-INV-2026-032", "client_name": "National Fibre Links", "gst_id": "33NATI8821F1Z6", "item": "Fiber Optic Routers", "category": "Electronics", "hs_code": "8517", "qty": 55, "rate": 67000, "date": "2026-04-14", "trade_type": "DOMESTIC", "origin": "Noida", "destination": "Coimbatore", "port": None, "customs_duty": None},
+]
+
+MORE_MOCK_SHIPMENTS = [
+    {"invoice_no": "LOG-EXP-2026-021", "shipping_bill_no": "SBC-EXP-621", "port": "Chennai Port", "clearance_status": "Cleared for Export", "clearance_date": "2026-04-11"},
+    {"invoice_no": "LOG-IMP-2026-022", "shipping_bill_no": "SBC-IMP-722", "port": "Hyderabad Airport", "clearance_status": "Awaiting Customs Assessment", "clearance_date": "Pending"},
+    {"invoice_no": "LOG-EXP-2026-024", "shipping_bill_no": "SBC-EXP-624", "port": "Tuticorin Port", "clearance_status": "Stuffing Complete", "clearance_date": "2026-04-12"},
+    {"invoice_no": "LOG-IMP-2026-025", "shipping_bill_no": "SBC-IMP-725", "port": "Nhava Sheva", "clearance_status": "Document Verification Pending", "clearance_date": "Pending"},
+    {"invoice_no": "LOG-EXP-2026-027", "shipping_bill_no": "SBC-EXP-627", "port": "Chennai Port", "clearance_status": "Handed to Shipping Line", "clearance_date": "2026-04-13"},
+    {"invoice_no": "LOG-IMP-2026-028", "shipping_bill_no": "SBC-IMP-728", "port": "Chennai Port", "clearance_status": "Gate-In at Port", "clearance_date": "2026-04-13"},
+    {"invoice_no": "LOG-EXP-2026-030", "shipping_bill_no": "SBC-EXP-630", "port": "Krishnapatnam Port", "clearance_status": "Customs Inspection Complete", "clearance_date": "2026-04-14"},
+    {"invoice_no": "LOG-IMP-2026-031", "shipping_bill_no": "SBC-IMP-731", "port": "Chennai Port", "clearance_status": "Awaiting Customs Duty", "clearance_date": "Pending"},
+]
+
+MOCK_TRANSACTIONS.extend(MORE_MOCK_TRANSACTIONS)
+MOCK_SHIPMENTS.extend(MORE_MOCK_SHIPMENTS)
+
+
+def save_uploaded_file(upload: UploadFile, allowed_suffixes: tuple[str, ...]) -> str:
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    _, suffix = os.path.splitext(upload.filename or "")
+    suffix = suffix.lower()
+    if suffix not in allowed_suffixes:
+        raise HTTPException(status_code=400, detail=f"Unsupported file type: {suffix or 'unknown'}")
+
+    filename = f"{datetime.datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}{suffix}"
+    file_path = os.path.join(UPLOAD_DIR, filename)
+    with open(file_path, "wb") as handle:
+        handle.write(upload.file.read())
+    return file_path
+
 
 @app.on_event("startup")
 def startup_seed_data():
@@ -110,14 +164,24 @@ def startup_seed_data():
     seed_erp_transactions(MOCK_TRANSACTIONS)
     seed_portal_shipments(MOCK_SHIPMENTS)
     seed_users(APP_USERS)
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    sync_vector_from_operational_data(reset=True)
+
+# Mount static files from the React build directory
+# Assuming 'npm run build' generates files in 'frontend/dist'
+if os.path.exists("frontend/dist"):
+    app.mount("/assets", StaticFiles(directory="frontend/dist/assets"), name="assets")
 
 @app.get("/", response_class=HTMLResponse)
-def erp_dashboard():
-    import os
+def root_page():
+    build_index = os.path.join("frontend", "dist", "index.html")
+    if os.path.exists(build_index):
+        with open(build_index, "r", encoding="utf-8") as f:
+            return f.read()
+
     file_path = os.path.join(os.path.dirname(__file__), "dashboard.html")
     with open(file_path, "r", encoding="utf-8") as f:
-        html_content = f.read()
-    return html_content
+        return f.read()
 
 
 @app.get("/api/dashboard/data")
@@ -322,6 +386,13 @@ def vector_status():
     return get_vector_db_stats()
 
 
+@app.post("/api/vector/rebuild")
+def rebuild_vector_index():
+    indexed = sync_vector_from_operational_data(reset=True)
+    stats = get_vector_db_stats()
+    return {"status": "success", "indexed_records": indexed, **stats}
+
+
 @app.get("/api/storage/status")
 def storage_status():
     return get_storage_status()
@@ -329,12 +400,19 @@ def storage_status():
 
 @app.post("/api/ingest/excel")
 def trigger_excel_ingestion(req: IngestRequest = IngestRequest()):
-    path = req.file_path or DEFAULT_EXCEL_PATH
+    path = resolve_repo_path(req.file_path, DEFAULT_EXCEL_PATH)
     rows = ingest_excel(path)
     transformed = [apply_mdm(transform_excel_record(r)) for r in rows]
     save_to_data_lake(transformed, reset=False)
     record_ingestion_run("excel", "Connected", len(transformed), f"File: {path}")
     return {"status": "success", "source": "EXCEL", "file": path, "records": len(transformed)}
+
+
+@app.post("/api/ingest/excel/upload")
+async def trigger_excel_upload(file: UploadFile = File(...)):
+    saved_path = save_uploaded_file(file, (".xlsx", ".xls"))
+    result = trigger_excel_ingestion(IngestRequest(file_path=saved_path))
+    return {**result, "uploaded_file": saved_path}
 
 
 @app.post("/api/ingest/erp")
@@ -359,7 +437,7 @@ def trigger_portal_ingestion():
 
 @app.post("/api/ingest/pdf")
 def trigger_pdf_ingestion(req: IngestRequest = IngestRequest()):
-    pattern = req.file_glob or DEFAULT_PDF_GLOB
+    pattern = resolve_repo_path(req.file_glob, DEFAULT_PDF_GLOB)
     pdf_files = glob.glob(pattern)
     transformed = []
 
@@ -387,6 +465,13 @@ def trigger_pdf_ingestion(req: IngestRequest = IngestRequest()):
         save_to_data_lake(transformed, reset=False)
     record_ingestion_run("pdf", "Connected", len(transformed), f"Files scanned: {len(pdf_files)}")
     return {"status": "success", "source": "PDF", "files": len(pdf_files), "records": len(transformed)}
+
+
+@app.post("/api/ingest/pdf/upload")
+async def trigger_pdf_upload(file: UploadFile = File(...)):
+    saved_path = save_uploaded_file(file, (".pdf",))
+    result = trigger_pdf_ingestion(IngestRequest(file_glob=saved_path))
+    return {**result, "uploaded_file": saved_path}
 
 
 @app.post("/api/ingest/email")
@@ -423,11 +508,18 @@ def trigger_email_ingestion(req: IngestRequest = IngestRequest()):
 
 @app.post("/api/ingest/all")
 def trigger_all_ingestion(req: IngestRequest = IngestRequest()):
-    erp_result = trigger_erp_ingestion()
-    portal_result = trigger_portal_ingestion()
-    excel_result = trigger_excel_ingestion(req)
-    pdf_result = trigger_pdf_ingestion(req)
-    email_result = trigger_email_ingestion(req)
+    def safe_run(label: str, runner):
+        try:
+            return runner()
+        except Exception as exc:
+            record_ingestion_run(label, "Error", 0, str(exc))
+            return {"status": "error", "source": label.upper(), "records": 0, "message": str(exc)}
+
+    erp_result = safe_run("erp", trigger_erp_ingestion)
+    portal_result = safe_run("portal", trigger_portal_ingestion)
+    excel_result = safe_run("excel", lambda: trigger_excel_ingestion(req))
+    pdf_result = safe_run("pdf", lambda: trigger_pdf_ingestion(req))
+    email_result = safe_run("email", lambda: trigger_email_ingestion(req))
     all_ok = all(r.get("status") == "success" for r in [erp_result, portal_result, excel_result, pdf_result, email_result])
     return {
         "status": "success" if all_ok else "partial",
@@ -487,3 +579,25 @@ def export_report(role: str = "super"):
         media_type="text/csv",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
+
+
+@app.get("/{full_path:path}", response_class=HTMLResponse)
+def serve_react_app(full_path: str):
+    # Catch-all must be registered last so API routes match first.
+    if full_path.startswith("api/") or full_path.startswith("erp/") or full_path.startswith("portal/"):
+        raise HTTPException(status_code=404)
+
+    build_index = os.path.join("frontend", "dist", "index.html")
+    if os.path.exists(build_index):
+        with open(build_index, "r", encoding="utf-8") as f:
+            return f.read()
+
+    return """
+    <html>
+        <body style="font-family: sans-serif; padding: 2rem; background: #0f2042; color: white;">
+            <h1>OmniLogix React App</h1>
+            <p>React build not found. Please run <code>npm run build</code> in the <code>frontend</code> directory.</p>
+            <p><a href="/erp/transactions" style="color: #4c9aff;">View Raw ERP API</a></p>
+        </body>
+    </html>
+    """

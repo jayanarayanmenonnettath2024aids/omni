@@ -126,6 +126,18 @@ const OperationsView = ({ view, dashboardData, userRole }) => {
     { name: 'Domestic', value: transactions.filter((tx) => String(tx.trade_type || '').toUpperCase() === 'DOMESTIC').length },
   ].filter((row) => row.value > 0);
 
+  const tradeMixBase = [
+    { name: 'Export', value: transactions.filter((tx) => String(tx.trade_type || '').toUpperCase() === 'EXPORT').length },
+    { name: 'Import', value: transactions.filter((tx) => String(tx.trade_type || '').toUpperCase() === 'IMPORT').length },
+    { name: 'Domestic', value: transactions.filter((tx) => String(tx.trade_type || '').toUpperCase() === 'DOMESTIC').length },
+  ];
+
+  const tradeMixTotal = tradeMixBase.reduce((sum, row) => sum + row.value, 0);
+  const tradeMixFull = tradeMixBase.map((row) => ({
+    ...row,
+    pct: tradeMixTotal ? Math.round((row.value / tradeMixTotal) * 100) : 0,
+  }));
+
   const tradeMixColors = ['#0052cc', '#0f766e', '#7c3aed'];
 
   const recentInvoices = transactions.slice(0, 10).map((tx) => ({
@@ -243,15 +255,50 @@ const OperationsView = ({ view, dashboardData, userRole }) => {
           </div>
           <div>
             <SectionCard title="Trade Mix" subtitle="Distribution by trade type">
-              <div className="h-[300px]">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie data={tradeMix} dataKey="value" nameKey="name" innerRadius={55} outerRadius={90} paddingAngle={6}>
-                      {tradeMix.map((entry, idx) => <Cell key={entry.name} fill={tradeMixColors[idx % tradeMixColors.length]} />)}
-                    </Pie>
-                    <Tooltip />
-                  </PieChart>
-                </ResponsiveContainer>
+              <div className="space-y-5">
+                <div className="h-[220px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={tradeMix.length ? tradeMix : [{ name: 'No Data', value: 1 }]}
+                        dataKey="value"
+                        nameKey="name"
+                        innerRadius={58}
+                        outerRadius={92}
+                        paddingAngle={4}
+                        minAngle={12}
+                      >
+                        {(tradeMix.length ? tradeMix : [{ name: 'No Data', value: 1 }]).map((entry, idx) => (
+                          <Cell key={entry.name} fill={tradeMix.length ? tradeMixColors[idx % tradeMixColors.length] : '#cbd5e1'} />
+                        ))}
+                      </Pie>
+                      <Tooltip formatter={(value) => [formatInteger(value), 'Shipments']} />
+                      <text x="50%" y="48%" textAnchor="middle" dominantBaseline="central" className="fill-slate-900 text-[26px] font-black">
+                        {formatInteger(tradeMixTotal)}
+                      </text>
+                      <text x="50%" y="60%" textAnchor="middle" dominantBaseline="central" className="fill-slate-500 text-[10px] font-black uppercase tracking-widest">
+                        Total Shipments
+                      </text>
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+
+                <div className="space-y-3">
+                  {tradeMixFull.map((row, idx) => (
+                    <div key={row.name} className="rounded-xl border border-gray-100 bg-gray-50/70 px-3 py-2.5">
+                      <div className="flex items-center justify-between gap-3 mb-2">
+                        <div className="flex items-center gap-2">
+                          <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ backgroundColor: tradeMixColors[idx % tradeMixColors.length] }}></span>
+                          <span className="text-xs font-black uppercase tracking-wide text-slate-700">{row.name}</span>
+                        </div>
+                        <div className="text-xs font-black text-slate-900">{formatInteger(row.value)} ({row.pct}%)</div>
+                      </div>
+                      <div className="h-2 rounded-full bg-slate-200 overflow-hidden">
+                        <div className="h-full rounded-full" style={{ width: `${Math.max(2, row.pct)}%`, backgroundColor: tradeMixColors[idx % tradeMixColors.length] }}></div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             </SectionCard>
           </div>

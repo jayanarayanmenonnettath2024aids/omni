@@ -1,8 +1,28 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import CardNav from './CardNav';
 
-const Layout = ({ children, currentTab, setTab, userRole, currentUser }) => {
-  const navItems = [
+const Layout = ({ children, currentTab, setTab, userRole, currentUser, onLogout }) => {
+  const dashboardTitle = useMemo(() => {
+    const titles = {
+      dashboard: 'Trade Dashboard',
+      ingestion: 'Data Ingestion',
+      erp: 'ERP Data Hub',
+      documents: 'Document Vault',
+      companies: 'Company Ledger',
+      shipments: 'Live Shipments',
+      map: 'Global Trade Map',
+      products: 'Product Catalog',
+      ai: 'AI Assistant Terminal',
+      'voice-agent': 'Live Voice Agent',
+      analytics: 'Trade Analytics',
+      reports: 'Enterprise Reports',
+      admin: 'Admin Console',
+      audit: 'Audit Control',
+    };
+    return titles[currentTab] || 'Trade Dashboard';
+  }, [currentTab]);
+
+  const navItems = useMemo(() => ([
     {
       label: 'Operations Center',
       bgColor: '#0f172a', // corp-navy
@@ -31,23 +51,27 @@ const Layout = ({ children, currentTab, setTab, userRole, currentUser }) => {
       textColor: '#ffffff',
       links: [
         { label: 'AI Trade Assistant', href: '#', onClick: (e) => { e.preventDefault(); setTab('ai'); } },
+        { label: 'Live Voice Agent', href: '#', onClick: (e) => { e.preventDefault(); setTab('voice-agent'); } },
         { label: 'Predictive Analytics', href: '#', onClick: (e) => { e.preventDefault(); setTab('analytics'); } },
         { label: 'Enterprise Reports', href: '#', onClick: (e) => { e.preventDefault(); setTab('reports'); } },
+        ...(userRole === 'super' ? [{ label: 'Admin Console', href: '#', onClick: (e) => { e.preventDefault(); setTab('admin'); } }] : []),
         ...(userRole === 'super' ? [{ label: 'Audit Control', href: '#', onClick: (e) => { e.preventDefault(); setTab('audit'); } }] : []),
       ]
     }
-  ];
+  ]), [setTab, userRole]);
 
   return (
     <div className="flex h-screen bg-corp-light overflow-hidden font-sans relative">
       <CardNav 
         items={navItems} 
-        logoText="OMNI"
+        logoText={dashboardTitle}
+        showLogo={false}
         baseColor="#ffffff"
         menuColor="#0f172a"
         textColor="#0f172a"
         userRole={userRole}
         currentUser={currentUser}
+        onLogout={onLogout}
         className="z-50 shadow-sm border-b border-corp-border/50"
       />
       

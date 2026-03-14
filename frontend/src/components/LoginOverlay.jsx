@@ -34,8 +34,8 @@ const RoleButton = ({ role, label, icon: Icon, color, onClick }) => (
   </button>
 );
 
-const LoginOverlay = ({ onLogin }) => {
-  const [step, setStep] = useState('auth'); // 'auth' or 'role'
+const LoginOverlay = ({ onLogin, initialStep = 'auth' }) => {
+  const [step, setStep] = useState(initialStep === 'role' ? 'role' : 'auth'); // 'auth' or 'role'
   const [isPanelActive, setIsPanelActive] = useState(false);
   
   // Form State

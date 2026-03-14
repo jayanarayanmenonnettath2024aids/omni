@@ -6,6 +6,29 @@ const LANGUAGE_OPTIONS = [
   { code: 'ta-IN', label: 'Tamil' },
 ];
 
+const QUICK_PROMPTS = {
+  'en-IN': [
+    'Show pending imports for this month',
+    'List invoices for this month',
+    'Show shipment anomalies by route',
+    'Give warehouse status for delayed shipments',
+  ],
+  'ta-IN': [
+    'இந்த மாத pending imports எவ்வளவு?',
+    'இந்த மாத invoice-களை பட்டியலிடு',
+    'route வாரியாக shipment anomalies காட்டு',
+    'delay ஆன shipment-களின் warehouse status சொல்லு',
+  ],
+};
+
+const getFallbackAnswer = (langCode, userMsg = '') => {
+  const queryHint = String(userMsg || '').trim();
+  if ((langCode || '').toLowerCase().startsWith('ta')) {
+    return `உங்கள் கேள்வி பெறப்பட்டது${queryHint ? `: "${queryHint}"` : ''}. இப்போது முழு பதில் கிடைக்கவில்லை. மீண்டும் முயற்சி செய்யவும் அல்லது மாதம்/இன்வாய்ஸ் எண்/route/warehouse போன்ற குறிப்புகளுடன் கேளுங்கள்.`;
+  }
+  return `Your query was received${queryHint ? `: "${queryHint}"` : ''}. A complete answer is not available right now. Please retry with month, invoice number, route, or warehouse details.`;
+};
+
 const normalizeSpeechText = (text, langCode) => {
   let normalized = String(text || '');
   normalized = normalized
@@ -48,7 +71,7 @@ const Message = ({ role, content }) => {
           {content}
         </div>
         <div className={`text-[10px] font-black uppercase tracking-widest text-slate-400 mt-2 px-2 flex items-center gap-2 ${isAI ? '' : 'flex-row-reverse text-right'}`}>
-          {isAI ? 'Trade Intelligent Assistant' : 'Terminal Operator'}
+          {isAI ? 'Trade Intelligence Assistant' : 'Terminal Operator'}
           <div className="w-1 h-3 bg-slate-200 rounded-full"></div>
           {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
         </div>
@@ -60,7 +83,10 @@ const Message = ({ role, content }) => {
 const AIAssistantView = () => {
   const [query, setQuery] = useState('');
   const [messages, setMessages] = useState([
-    { role: 'ai', content: 'Hello! I am your Trade Intelligence Assistant. You can speak or type to me in English or Tamil. How can I assist you with your logistics data today?' }
+    {
+      role: 'ai',
+      content: 'Welcome to Omni Trade Intelligence. Ask me about invoices, pending imports, shipment anomalies, route performance, and warehouse status. You can speak or type in English and Tamil.'
+    }
   ]);
   const [isLoading, setIsLoading] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
@@ -283,6 +309,7 @@ const AIAssistantView = () => {
   const sendQuery = async (messageOverride, options = {}) => {
     const userMsg = (messageOverride ?? query).trim();
     if (!userMsg) return;
+    let assistantPosted = false;
 
     setMessages((prev) => [...prev, { role: 'user', content: userMsg }]);
     setQuery('');
@@ -291,11 +318,15 @@ const AIAssistantView = () => {
 
     try {
       const history = messagesRef.current.slice(-10).map((m) => ({ role: m.role, content: m.content }));
+      const controller = new AbortController();
+      const timer = window.setTimeout(() => controller.abort(), 45000);
       const response = await fetch('/api/ai/chat', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ message: userMsg, lang: selectedLangRef.current, history })
+        body: JSON.stringify({ message: userMsg, lang: selectedLangRef.current, history }),
+        signal: controller.signal,
       });
+      window.clearTimeout(timer);
 
       if (!response.ok) {
         const detail = await response.text();
@@ -303,13 +334,25 @@ const AIAssistantView = () => {
       }
 
       const data = await response.json();
-      const answer = data?.answer || 'No response returned.';
+      const answer = String(data?.answer || '').trim() || getFallbackAnswer(selectedLangRef.current, userMsg);
+      assistantPosted = true;
       setMessages((prev) => [...prev, { role: 'ai', content: answer }]);
       await speakAnswer(answer);
     } catch (e) {
-      setMessages((prev) => [...prev, { role: 'ai', content: 'System error: Unable to connect to inference engine.' }]);
+      assistantPosted = true;
+      setMessages((prev) => [...prev, {
+        role: 'ai',
+        content: getFallbackAnswer(selectedLangRef.current, userMsg)
+      }]);
       setVoiceError(e?.message || 'Unable to reach the assistant service.');
     } finally {
+      if (!assistantPosted) {
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          if (last?.role === 'ai') return prev;
+          return [...prev, { role: 'ai', content: getFallbackAnswer(selectedLangRef.current, userMsg) }];
+        });
+      }
       setIsLoading(false);
       if (options.restartListening && micShouldRemainOnRef.current) {
         restartAfterTurnRef.current = false;
@@ -341,7 +384,7 @@ const AIAssistantView = () => {
             AI <span className="text-indigo-600">Assistant</span> Terminal
             <span className="bg-indigo-100 text-indigo-600 text-[10px] font-black px-2 py-1 rounded-lg uppercase tracking-widest border border-indigo-200">BETA</span>
           </h1>
-          <p className="text-sm text-gray-500 font-medium">Multi-modal trade intelligence with English and Tamil voice interaction.</p>
+          <p className="text-sm text-gray-500 font-medium">Multimodal trade intelligence for invoices, imports, routes, anomalies, and warehouse health in English and Tamil.</p>
         </div>
         <div className="flex items-center gap-3">
           <div className="flex rounded-xl border border-slate-200 bg-white p-1 shadow-sm">
@@ -367,6 +410,12 @@ const AIAssistantView = () => {
             className="p-3 rounded-xl border border-slate-200 bg-white text-slate-500 hover:text-indigo-600 hover:border-indigo-200 disabled:opacity-50 transition-all"
           >
             <Volume2 size={18} />
+          </button>
+          <button
+            onClick={() => setMessages([{ role: 'ai', content: selectedLang === 'ta-IN' ? 'உங்கள் கேள்விகளை நான் தமிழிலும் ஆங்கிலத்திலும் செயல்படுத்துவேன். மாதம், invoice எண், route அல்லது warehouse பெயருடன் கேளுங்கள்.' : 'I can help in English and Tamil. Ask with month, invoice number, route, or warehouse name for accurate answers.' }])}
+            className="px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border bg-white text-slate-500 border-slate-200 hover:bg-slate-100 transition-all"
+          >
+            Clear Chat
           </button>
         </div>
       </div>
@@ -415,15 +464,13 @@ const AIAssistantView = () => {
 
         <div className="p-8 bg-gray-50/50 border-t border-corp-border relative z-10">
           <div className="flex gap-6 mb-4 overflow-x-auto no-scrollbar pb-2">
-            {[
-              selectedLang === 'ta-IN' ? 'இந்த மாத invoice-கள்' : 'Invoices this month',
-              selectedLang === 'ta-IN' ? 'Shipment anomalies' : 'Shipment anomalies',
-              selectedLang === 'ta-IN' ? 'Warehouse status' : 'Warehouse status',
-              selectedLang === 'ta-IN' ? 'Pending imports' : 'Pending imports',
-            ].map(p => (
+            {(QUICK_PROMPTS[selectedLang] || QUICK_PROMPTS['en-IN']).map(p => (
               <button 
                 key={p} 
-                onClick={() => setQuery(p)}
+                onClick={() => {
+                  setQuery(p);
+                  void sendQuery(p);
+                }}
                 className="whitespace-nowrap bg-white text-[10px] font-black uppercase tracking-widest text-slate-500 px-4 py-2 rounded-xl border border-slate-200 hover:border-indigo-400 hover:text-indigo-600 transition-all shadow-sm active:scale-95"
               >
                 {p}

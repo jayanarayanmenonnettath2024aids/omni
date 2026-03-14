@@ -139,15 +139,58 @@ const Dashboard = () => {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [userRole, setUserRole] = useState('super');
   const [currentUser, setCurrentUser] = useState(null);
+  const [loginInitialStep, setLoginInitialStep] = useState('auth');
   const [currentTab, setCurrentTab] = useState('dashboard');
   const [dashboardData, setDashboardData] = useState(null);
   const [loadingData, setLoadingData] = useState(false);
   const [dashboardError, setDashboardError] = useState('');
 
+  useEffect(() => {
+    try {
+      const storedUser = window.localStorage.getItem('omni-current-user');
+      if (!storedUser) return;
+
+      const parsedUser = JSON.parse(storedUser);
+      if (!parsedUser || typeof parsedUser !== 'object') return;
+
+      setCurrentUser(parsedUser);
+      setUserRole((parsedUser.role || 'super').toLowerCase());
+      setIsLoggedIn(true);
+    } catch (_error) {
+      window.localStorage.removeItem('omni-current-user');
+    }
+  }, []);
+
   const handleLogin = (user) => {
-    setUserRole((user?.role || 'super').toLowerCase());
-    setCurrentUser(user || null);
+    const nextUser = user || null;
+    setUserRole((nextUser?.role || 'super').toLowerCase());
+    setCurrentUser(nextUser);
+    setLoginInitialStep('auth');
+    if (nextUser) {
+      window.localStorage.setItem('omni-current-user', JSON.stringify(nextUser));
+    }
     setIsLoggedIn(true);
+  };
+
+  const handleSwitchDesk = () => {
+    setIsLoggedIn(false);
+    setCurrentUser(null);
+    setCurrentTab('dashboard');
+    setDashboardError('');
+    setDashboardData(null);
+    setLoginInitialStep('role');
+    window.localStorage.removeItem('omni-current-user');
+  };
+
+  const handleLogout = () => {
+    setIsLoggedIn(false);
+    setCurrentUser(null);
+    setUserRole('super');
+    setCurrentTab('dashboard');
+    setDashboardError('');
+    setDashboardData(null);
+    setLoginInitialStep('auth');
+    window.localStorage.removeItem('omni-current-user');
   };
 
   useEffect(() => {
@@ -253,7 +296,7 @@ const Dashboard = () => {
     window.open(`/api/export/report?role=${encodeURIComponent(userRole)}`, '_blank');
   };
 
-  if (!isLoggedIn) return <LoginOverlay onLogin={handleLogin} />;
+  if (!isLoggedIn) return <LoginOverlay onLogin={handleLogin} initialStep={loginInitialStep} />;
 
   const renderContent = () => {
     switch (currentTab) {
@@ -273,10 +316,7 @@ const Dashboard = () => {
               </div>
               <div className="flex gap-3">
                 <button 
-                  onClick={() => {
-                    setIsLoggedIn(false);
-                    setCurrentUser(null);
-                  }} 
+                  onClick={handleSwitchDesk} 
                   className="bg-white border border-red-200 text-red-600 px-5 py-2.5 rounded-xl hover:bg-red-50 font-bold text-xs uppercase tracking-widest transition-all active:scale-95 flex items-center gap-2"
                 >
                   <Clock size={14} /> Switch Desk
@@ -440,7 +480,7 @@ const Dashboard = () => {
   };
 
   return (
-    <Layout currentTab={currentTab} setTab={setCurrentTab} userRole={userRole} currentUser={currentUser}>
+    <Layout currentTab={currentTab} setTab={setCurrentTab} userRole={userRole} currentUser={currentUser} onLogout={handleLogout}>
       {renderContent()}
     </Layout>
   );

@@ -13,12 +13,15 @@ import glob
 import uuid
 import io
 import csv
+import threading
 from dotenv import load_dotenv
+from apscheduler.schedulers.background import BackgroundScheduler
 from ingestion.excel_ingest import ingest_excel
 from ingestion.pdf_ingest import extract_pdf_text_and_tables
 from ingestion.email_imap_ingest import ingest_unseen_emails
 from processing.transform import transform_excel_record, transform_pdf_record, transform_email_record, transform_erp_record, transform_portal_record
 from processing.mdm import apply_mdm
+from processing.document_parser import parse_trade_document
 from processing.database import (
     init_db,
     save_to_data_lake,
@@ -38,14 +41,29 @@ from processing.database import (
     get_ingestion_connector_stats,
     sync_vector_from_operational_data,
     ensure_vector_sync_with_operational_data,
+    get_master_data_stats,
+    sync_master_data_from_operational_records,
 )
 
-# Load environment variables from .env file
-load_dotenv()
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Always load env from project root and override inherited shell values.
+load_dotenv(os.path.join(BASE_DIR, ".env"), override=True)
 
 app = FastAPI()
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+pipeline_scheduler = BackgroundScheduler()
+pipeline_scheduler_lock = threading.Lock()
+pipeline_status = {
+    "enabled": False,
+    "interval_minutes": 0,
+    "last_run_at": "",
+    "last_status": "idle",
+    "last_message": "",
+    "ocr_enabled": True,
+    "nlp_parser": "regex-heuristic-parser",
+}
+
 DEFAULT_EXCEL_PATH = os.path.join(BASE_DIR, "data", "logistics_shipments.xlsx")
 DEFAULT_PDF_GLOB = os.path.join(BASE_DIR, "data", "*.pdf")
 UPLOAD_DIR = os.path.join(BASE_DIR, "data", "uploads")
@@ -85,10 +103,100 @@ class RegisterRequest(BaseModel):
 
 class VoiceSessionStartRequest(BaseModel):
     agent_id: Optional[str] = None
+    user_identity: Optional[str] = None
+    room_name: Optional[str] = None
 
 
 class VoiceSessionEndRequest(BaseModel):
     room_name: str
+
+
+def _resolve_lyzr_url(base_url: str, path: str) -> str:
+    clean = (path or "").strip()
+    if clean.startswith("http://") or clean.startswith("https://"):
+        return clean
+    if not clean:
+        return base_url
+    if not clean.startswith("/"):
+        clean = f"/{clean}"
+    return f"{base_url}{clean}"
+
+
+def _lyzr_start_candidates(base_url: str):
+    configured = os.getenv("LYZR_VOICE_SESSION_START_PATH", "").strip()
+    candidates = []
+    if configured:
+        candidates.append(_resolve_lyzr_url(base_url, configured))
+    # Fallback list supports old and alternative gateway layouts.
+    candidates.extend(
+        [
+            f"{base_url}/v1/sessions/start",
+            f"{base_url}/v1/session/start",
+            f"{base_url}/api/v1/session/start",
+            f"{base_url}/session/start",
+        ]
+    )
+    return candidates
+
+
+def _lyzr_end_candidates(base_url: str):
+    configured = os.getenv("LYZR_VOICE_SESSION_END_PATH", "").strip()
+    candidates = []
+    if configured:
+        candidates.append(_resolve_lyzr_url(base_url, configured))
+    candidates.extend(
+        [
+            f"{base_url}/v1/sessions/end",
+            f"{base_url}/v1/session/end",
+            f"{base_url}/api/v1/session/end",
+            f"{base_url}/session/end",
+        ]
+    )
+    return candidates
+
+
+async def _post_lyzr_with_fallback(client: httpx.AsyncClient, urls: List[str], payload: Dict, headers: Dict):
+    attempts = []
+    for url in urls:
+        try:
+            response = await client.post(url, json=payload, headers=headers)
+            if response.status_code < 400:
+                return response, attempts
+            attempts.append({"url": url, "status": response.status_code, "body": (response.text or "")[:200]})
+            if response.status_code not in (404, 405):
+                return response, attempts
+        except Exception as exc:
+            attempts.append({"url": url, "status": "error", "body": str(exc)[:200]})
+    return None, attempts
+
+
+def _scheduler_enabled():
+    return os.getenv("ETL_SCHEDULER_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _scheduler_interval_minutes():
+    try:
+        return max(5, int(os.getenv("ETL_SCHEDULER_INTERVAL_MINUTES", "30")))
+    except Exception:
+        return 30
+
+
+def _run_scheduled_etl():
+    if not pipeline_scheduler_lock.acquire(blocking=False):
+        return
+    try:
+        pipeline_status["last_status"] = "running"
+        pipeline_status["last_message"] = "Scheduled ETL run in progress"
+        result = trigger_all_ingestion(IngestRequest())
+        pipeline_status["last_run_at"] = datetime.datetime.now().isoformat(timespec="seconds")
+        pipeline_status["last_status"] = result.get("status", "success")
+        pipeline_status["last_message"] = f"Processed {result.get('summary', {}).get('total_records', 0)} records"
+    except Exception as exc:
+        pipeline_status["last_run_at"] = datetime.datetime.now().isoformat(timespec="seconds")
+        pipeline_status["last_status"] = "error"
+        pipeline_status["last_message"] = str(exc)
+    finally:
+        pipeline_scheduler_lock.release()
 
 # In-memory mock database
 MOCK_TRANSACTIONS = [
@@ -175,6 +283,18 @@ def startup_seed_data():
     seed_users(APP_USERS)
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     sync_vector_from_operational_data(reset=True)
+    sync_master_data_from_operational_records()
+    pipeline_status["enabled"] = _scheduler_enabled()
+    pipeline_status["interval_minutes"] = _scheduler_interval_minutes()
+    if pipeline_status["enabled"] and not pipeline_scheduler.running:
+        pipeline_scheduler.add_job(_run_scheduled_etl, 'interval', minutes=pipeline_status["interval_minutes"], id='scheduled-etl', replace_existing=True)
+        pipeline_scheduler.start()
+
+
+@app.on_event("shutdown")
+def shutdown_scheduler():
+    if pipeline_scheduler.running:
+        pipeline_scheduler.shutdown(wait=False)
 
 # Mount static files from the React build directory
 # Assuming 'npm run build' generates files in 'frontend/dist'
@@ -246,6 +366,7 @@ async def start_voice_agent_session(req: VoiceSessionStartRequest):
     api_key = os.getenv("LYZR_VOICE_API_KEY", "").strip()
     agent_id = (req.agent_id or os.getenv("LYZR_VOICE_AGENT_ID", "")).strip()
     base_url = os.getenv("LYZR_VOICE_BASE_URL", "https://voice-livekit.studio.lyzr.ai").rstrip("/")
+    user_identity = (req.user_identity or f"local-user-{uuid.uuid4().hex[:8]}").strip()
 
     if not api_key:
         raise HTTPException(status_code=500, detail="LYZR_VOICE_API_KEY not configured")
@@ -258,18 +379,29 @@ async def start_voice_agent_session(req: VoiceSessionStartRequest):
     }
 
     try:
+        payload = {
+            "agentId": agent_id,
+            "userIdentity": user_identity,
+        }
+        if req.room_name and req.room_name.strip():
+            payload["roomName"] = req.room_name.strip()
+
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                f"{base_url}/v1/session/start",
-                json={"agentId": agent_id},
-                headers=headers,
+            response, attempts = await _post_lyzr_with_fallback(
+                client,
+                _lyzr_start_candidates(base_url),
+                payload,
+                headers,
             )
+        if response is None:
+            raise HTTPException(status_code=502, detail={"message": "Voice agent start endpoint unavailable", "attempts": attempts})
         if response.status_code >= 400:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
+            raise HTTPException(status_code=response.status_code, detail={"message": "Voice agent start failed", "body": response.text[:300], "attempts": attempts})
         payload = response.json()
         return {
             "status": "success",
             "provider": "lyzr-livekit",
+            "resolved_endpoint": str(response.request.url),
             **payload,
         }
     except HTTPException:
@@ -297,15 +429,18 @@ async def end_voice_agent_session(req: VoiceSessionEndRequest):
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                f"{base_url}/v1/session/end",
-                json={"roomName": req.room_name.strip()},
-                headers=headers,
+            response, attempts = await _post_lyzr_with_fallback(
+                client,
+                _lyzr_end_candidates(base_url),
+                {"roomName": req.room_name.strip()},
+                headers,
             )
+        if response is None:
+            raise HTTPException(status_code=502, detail={"message": "Voice agent end endpoint unavailable", "attempts": attempts})
         if response.status_code >= 400:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
+            raise HTTPException(status_code=response.status_code, detail={"message": "Voice agent end failed", "body": response.text[:300], "attempts": attempts})
         payload = response.json() if response.content else {"status": "ended"}
-        return {"status": "success", **payload}
+        return {"status": "success", "resolved_endpoint": str(response.request.url), **payload}
     except HTTPException:
         raise
     except httpx.TimeoutException:
@@ -341,6 +476,23 @@ def trigger_sync():
 @app.get("/api/ingestion/connectors")
 def ingestion_connectors():
     return {"connectors": get_ingestion_connector_stats()}
+
+
+@app.get("/api/pipeline/status")
+def get_pipeline_status():
+    next_run = None
+    if pipeline_scheduler.running:
+        job = pipeline_scheduler.get_job('scheduled-etl')
+        next_run = job.next_run_time.isoformat() if job and job.next_run_time else None
+    return {
+        **pipeline_status,
+        "next_run_at": next_run,
+    }
+
+
+@app.get("/api/mdm/status")
+def mdm_status():
+    return get_master_data_stats()
 
 @app.get("/api/audit/report")
 def get_audit():
@@ -529,22 +681,15 @@ def trigger_pdf_ingestion(req: IngestRequest = IngestRequest()):
 
     for file_path in pdf_files:
         text, _tables = extract_pdf_text_and_tables(file_path)
-        invoice_no = f"PDF-{uuid.uuid4().hex[:8]}"
-        amount = 0
-        parsed_amount = [token for token in text.replace(",", " ").split() if token.isdigit()]
-        if parsed_amount:
-            try:
-                amount = float(parsed_amount[-1])
-            except Exception:
-                amount = 0
-
-        payload = {
-            "invoice_no": invoice_no,
-            "client_name": "Document Client",
-            "amount": amount,
-            "date": datetime.date.today().strftime("%Y-%m-%d"),
-            "item": "Document Shipment",
-        }
+        payload = parse_trade_document(text, _tables, os.path.basename(file_path))
+        if not payload.get("invoice_no"):
+            payload["invoice_no"] = f"PDF-{uuid.uuid4().hex[:8]}"
+        if not payload.get("client_name"):
+            payload["client_name"] = "Document Client"
+        if not payload.get("date"):
+            payload["date"] = datetime.date.today().strftime("%Y-%m-%d")
+        if not payload.get("item"):
+            payload["item"] = "Document Shipment"
         transformed.append(apply_mdm(transform_pdf_record(payload)))
 
     if transformed:
@@ -607,6 +752,7 @@ def trigger_all_ingestion(req: IngestRequest = IngestRequest()):
     pdf_result = safe_run("pdf", lambda: trigger_pdf_ingestion(req))
     email_result = safe_run("email", lambda: trigger_email_ingestion(req))
     all_ok = all(r.get("status") == "success" for r in [erp_result, portal_result, excel_result, pdf_result, email_result])
+    sync_master_data_from_operational_records()
     return {
         "status": "success" if all_ok else "partial",
         "results": {

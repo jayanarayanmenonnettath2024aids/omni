@@ -34,7 +34,7 @@ MASTER_PRODUCTS = [
 
 def standardize_entity(raw_name, master_list, entity_type):
     if not isinstance(raw_name, str) or not raw_name.strip():
-        return raw_name
+        return raw_name, 0
         
     # Try fuzzy matching against our "golden" records using token_sort_ratio
     match, score = process.extractOne(raw_name, master_list, scorer=fuzz.token_sort_ratio)
@@ -43,11 +43,19 @@ def standardize_entity(raw_name, master_list, entity_type):
     if score >= 80:
         if raw_name.strip().lower() != match.lower():
             print(f"      [MDM AI] Resolved {entity_type}: '{raw_name}' -> '{match}' (Confidence: {score}%)")
-        return match
+        return match, score
     else:
         # Otherwise, standardize formatting
         cleaned = raw_name.strip().title()
-        return cleaned
+        return cleaned, score
+
+
+def _persist_resolution(entity_type, raw_value, canonical_value, confidence):
+    try:
+        from processing.database import register_master_entity
+        register_master_entity(entity_type, raw_value, canonical_value, confidence)
+    except Exception:
+        pass
 
 def apply_mdm(unified_record):
     """
@@ -56,26 +64,41 @@ def apply_mdm(unified_record):
     """
     # Clean and resolve customer
     if unified_record.get("customer") and unified_record["customer"].get("name"):
-        unified_record["customer"]["name"] = standardize_entity(
+        canonical, confidence = standardize_entity(
             unified_record["customer"]["name"], MASTER_CUSTOMERS, "Customer"
         )
+        _persist_resolution("customer", unified_record["customer"]["name"], canonical, confidence)
+        unified_record["customer"]["name"] = canonical
     
     # Clean and resolve products
     if unified_record.get("shipment") and unified_record["shipment"].get("product_description"):
-        unified_record["shipment"]["product_description"] = standardize_entity(
+        canonical, confidence = standardize_entity(
             unified_record["shipment"]["product_description"], MASTER_PRODUCTS, "Product"
         )
+        _persist_resolution("product", unified_record["shipment"]["product_description"], canonical, confidence)
+        unified_record["shipment"]["product_description"] = canonical
+
+    if unified_record.get("product") and unified_record["product"].get("name"):
+        canonical, confidence = standardize_entity(
+            unified_record["product"]["name"], MASTER_PRODUCTS, "Product"
+        )
+        _persist_resolution("product", unified_record["product"]["name"], canonical, confidence)
+        unified_record["product"]["name"] = canonical
 
     # Clean and resolve locations
     if unified_record.get("shipment"):
         if unified_record["shipment"].get("origin_location"):
-            unified_record["shipment"]["origin_location"] = standardize_entity(
+            canonical, confidence = standardize_entity(
                 unified_record["shipment"]["origin_location"], MASTER_LOCATIONS, "Location"
             )
+            _persist_resolution("location", unified_record["shipment"]["origin_location"], canonical, confidence)
+            unified_record["shipment"]["origin_location"] = canonical
         
         if unified_record["shipment"].get("destination_location"):
-            unified_record["shipment"]["destination_location"] = standardize_entity(
+            canonical, confidence = standardize_entity(
                 unified_record["shipment"]["destination_location"], MASTER_LOCATIONS, "Location"
             )
+            _persist_resolution("location", unified_record["shipment"]["destination_location"], canonical, confidence)
+            unified_record["shipment"]["destination_location"] = canonical
             
     return unified_record

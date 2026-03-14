@@ -1,5 +1,5 @@
 import React from 'react';
-import { LayoutDashboard, Network, Database, FileText, Building2, Ship, Globe, Box, Bot, Microscope, PieChart, FileSearch, Settings, ChevronRight } from 'lucide-react';
+import { LayoutDashboard, Network, Database, FileText, Building2, Ship, Globe, Box, Bot, Mic, Microscope, PieChart, FileSearch, Settings, ChevronRight } from 'lucide-react';
 
 const NavItem = ({ icon: Icon, label, active, onClick, badge }) => (
   <div 
@@ -44,6 +44,7 @@ const Sidebar = ({ currentTab, setTab, userRole }) => {
         
         <div className="px-5 mb-2 mt-6 text-xs font-bold text-gray-500 uppercase tracking-widest">Intelligence</div>
         <NavItem icon={Bot} label="AI Assistant" active={currentTab === 'ai'} onClick={() => setTab('ai')} badge="BETA" />
+        <NavItem icon={Mic} label="Live Voice Agent" active={currentTab === 'voice-agent'} onClick={() => setTab('voice-agent')} />
         {userRole === 'super' && (
           <NavItem icon={Microscope} label="Audit Control" active={currentTab === 'audit'} onClick={() => setTab('audit')} />
         )}

@@ -49,20 +49,30 @@ const ConnectionRow = ({ name, type, status, time, volume }) => (
 const IngestionView = () => {
   const [isSyncing, setIsSyncing] = useState(false);
   const [connectors, setConnectors] = useState([]);
+  const [pipelineStatus, setPipelineStatus] = useState(null);
+  const [mdmStatus, setMdmStatus] = useState(null);
   const [excelFile, setExcelFile] = useState(null);
   const [pdfFile, setPdfFile] = useState(null);
   const [activeUpload, setActiveUpload] = useState('');
 
   const loadConnectors = async () => {
     try {
-      const res = await fetch('/api/ingestion/connectors');
+      const [res, pipelineRes, mdmRes] = await Promise.all([
+        fetch('/api/ingestion/connectors'),
+        fetch('/api/pipeline/status'),
+        fetch('/api/mdm/status'),
+      ]);
       if (!res.ok) {
         throw new Error(`Connector request failed with ${res.status}`);
       }
       const data = await res.json();
       setConnectors(data.connectors || []);
+      setPipelineStatus(pipelineRes.ok ? await pipelineRes.json() : null);
+      setMdmStatus(mdmRes.ok ? await mdmRes.json() : null);
     } catch (_e) {
       setConnectors([]);
+      setPipelineStatus(null);
+      setMdmStatus(null);
     }
   };
 
@@ -188,6 +198,28 @@ const IngestionView = () => {
         </div>
       </div>
 
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+        <div className="bg-white border border-corp-border rounded-2xl enterprise-shadow p-6">
+          <div className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-3">Scheduled ETL</div>
+          <div className="text-2xl font-black text-corp-dark mb-2">{pipelineStatus?.enabled ? 'Enabled' : 'Disabled'}</div>
+          <div className="text-sm font-semibold text-slate-600">Interval: every {pipelineStatus?.interval_minutes || 0} minutes</div>
+          <div className="mt-2 text-xs font-bold text-gray-500">Next run: {pipelineStatus?.next_run_at || '-'}</div>
+          <div className="mt-2 text-xs font-bold text-gray-500">Last status: {pipelineStatus?.last_status || '-'}</div>
+        </div>
+        <div className="bg-white border border-corp-border rounded-2xl enterprise-shadow p-6">
+          <div className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-3">OCR + NLP Parsing</div>
+          <div className="text-2xl font-black text-corp-dark mb-2">Active</div>
+          <div className="text-sm font-semibold text-slate-600">PDF text extraction with OCR fallback and heuristic document parser.</div>
+          <div className="mt-2 text-xs font-bold text-gray-500">Parser: {pipelineStatus?.nlp_parser || 'regex-heuristic-parser'}</div>
+        </div>
+        <div className="bg-white border border-corp-border rounded-2xl enterprise-shadow p-6">
+          <div className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-3">MDM Governance</div>
+          <div className="text-2xl font-black text-corp-dark mb-2">{mdmStatus?.resolution_count || 0}</div>
+          <div className="text-sm font-semibold text-slate-600">Persisted entity resolutions across customers, products, and locations.</div>
+          <div className="mt-2 text-xs font-bold text-gray-500">Customers: {mdmStatus?.entities?.customer || 0} | Products: {mdmStatus?.entities?.product || 0} | Locations: {mdmStatus?.entities?.location || 0}</div>
+        </div>
+      </div>
+
       <div className="bg-white border border-corp-border rounded-[2.5rem] enterprise-shadow p-10 mb-10 overflow-hidden relative group">
         <div className="absolute top-0 right-0 w-64 h-64 bg-blue-50 rounded-full -mr-32 -mt-32 blur-3xl opacity-50 transition-all duration-1000 group-hover:scale-150"></div>
         <h3 className="text-[10px] font-black text-corp-dark uppercase tracking-[0.3em] mb-10 border-b border-gray-100 pb-4">Real-time ETL Processing Architecture</h3>
@@ -198,11 +230,11 @@ const IngestionView = () => {
           <div className="flex-1 h-[2px] bg-gradient-to-r from-blue-500 to-blue-500/20 mx-4 opacity-30"></div>
           <PipelineStep icon={Brain} label="NLP Extraction" status="Active" active={true} />
           <div className="flex-1 h-[2px] bg-gradient-to-r from-blue-500 to-blue-500/20 mx-4 opacity-30 animate-pulse"></div>
-          <PipelineStep icon={Fingerprint} label="Entity Res" status="Processing" active={true} pulse={true} />
-          <div className="flex-1 h-[2px] bg-gray-200 mx-4 opacity-30"></div>
-          <PipelineStep icon={Database} label="DB Storage" status="Waiting" active={false} />
-          <div className="flex-1 h-[2px] bg-gray-200 mx-4 opacity-30"></div>
-          <PipelineStep icon={Layers} label="Vector Index" status="Waiting" active={false} />
+          <PipelineStep icon={Fingerprint} label="Entity Res" status="Active" active={true} pulse={false} />
+          <div className="flex-1 h-[2px] bg-gradient-to-r from-blue-500 to-blue-500/20 mx-4 opacity-30"></div>
+          <PipelineStep icon={Database} label="DB Storage" status="Active" active={true} />
+          <div className="flex-1 h-[2px] bg-gradient-to-r from-blue-500 to-blue-500/20 mx-4 opacity-30"></div>
+          <PipelineStep icon={Layers} label="Vector Index" status="Active" active={true} />
         </div>
       </div>
 

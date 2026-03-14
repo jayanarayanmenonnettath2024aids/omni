@@ -9,3 +9,6 @@ httpx
 chromadb
 psycopg2-binary
 python-multipart
+apscheduler
+PyMuPDF
+rapidocr-onnxruntime

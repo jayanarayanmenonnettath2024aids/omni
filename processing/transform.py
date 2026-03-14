@@ -82,17 +82,37 @@ def transform_email_record(raw):
     }
 
 def transform_pdf_record(raw):
+    trade_type = (raw.get("trade_type") or "DOMESTIC").upper()
+    quantity = int(raw.get("qty") or 1)
+    total_value = float(raw.get("amount") or 0)
+    unit_price = total_value / quantity if quantity else total_value
     return {
         "source": "PDF",
-        "document_type": "INVOICE",
+        "document_type": raw.get("document_type") or "INVOICE",
         "invoice_no": raw.get("invoice_no"),
+        "trade_type": trade_type,
         "customer": {
             "name": raw.get("client_name"),
+            "gst_number": raw.get("gst_id"),
+        },
+        "product": {
+            "name": raw.get("item"),
+            "category": raw.get("category"),
         },
         "transaction": {
-            "total_value": float(raw.get("amount") or 0),
-            "transaction_date": raw.get("date")
-        }
+            "total_value": total_value,
+            "transaction_date": raw.get("date"),
+            "quantity": quantity,
+            "unit_price": unit_price,
+            "trade_type": trade_type,
+        },
+        "shipment": {
+            "origin_location": raw.get("origin"),
+            "destination_location": raw.get("destination"),
+            "port": raw.get("port"),
+            "customs_duty": raw.get("customs_duty"),
+            "product_description": raw.get("item"),
+        },
     }
 
 def transform_excel_record(raw):

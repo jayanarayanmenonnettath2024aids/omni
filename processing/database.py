@@ -27,12 +27,36 @@ def _pg_enabled():
     return os.getenv("POSTGRES_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on")
 
 
+def _ensure_pg_database_exists(config):
+    admin_cfg = dict(config)
+    admin_cfg["dbname"] = os.getenv("POSTGRES_ADMIN_DB", "postgres")
+    conn = psycopg2.connect(**admin_cfg)
+    conn.autocommit = True
+    cur = conn.cursor()
+    db_name = config["dbname"]
+    cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (db_name,))
+    exists = cur.fetchone() is not None
+    if not exists:
+        safe_db_name = str(db_name).replace('"', '""')
+        cur.execute(f'CREATE DATABASE "{safe_db_name}"')
+    conn.close()
+
+
 def _get_pg_conn():
     if not _pg_enabled():
         raise RuntimeError("Postgres integration disabled")
     if psycopg2 is None:
         raise RuntimeError("psycopg2 is not installed")
-    return psycopg2.connect(**_pg_config())
+    config = _pg_config()
+    try:
+        return psycopg2.connect(**config)
+    except Exception as exc:
+        exc_text = str(exc).lower()
+        # 3D000: invalid_catalog_name (database does not exist)
+        if getattr(exc, "pgcode", None) == "3D000" or "does not exist" in exc_text:
+            _ensure_pg_database_exists(config)
+            return psycopg2.connect(**config)
+        raise
 
 
 def _init_postgres():
@@ -57,6 +81,7 @@ def _init_postgres():
         )
         '''
     )
+    cur.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_unified_trade_invoice_source ON unified_trade (invoice_no, source)')
     cur.execute(
         '''
         CREATE TABLE IF NOT EXISTS erp_transactions (
@@ -113,6 +138,46 @@ def _init_postgres():
         )
         '''
     )
+    cur.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS master_entities (
+            id SERIAL PRIMARY KEY,
+            entity_type TEXT,
+            canonical_name TEXT,
+            first_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            occurrence_count INTEGER DEFAULT 1,
+            UNIQUE(entity_type, canonical_name)
+        )
+        '''
+    )
+    cur.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS master_entity_aliases (
+            id SERIAL PRIMARY KEY,
+            entity_type TEXT,
+            raw_value TEXT,
+            canonical_name TEXT,
+            confidence DOUBLE PRECISION,
+            first_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            occurrence_count INTEGER DEFAULT 1,
+            UNIQUE(entity_type, raw_value)
+        )
+        '''
+    )
+    cur.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS mdm_resolution_log (
+            id SERIAL PRIMARY KEY,
+            entity_type TEXT,
+            raw_value TEXT,
+            canonical_name TEXT,
+            confidence DOUBLE PRECISION,
+            resolved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        '''
+    )
     conn.commit()
     conn.close()
 
@@ -146,6 +211,7 @@ def init_db():
         )
         '''
     )
+    cur.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_unified_trade_invoice_source ON unified_trade (invoice_no, source)')
     cur.execute(
         '''
         CREATE TABLE IF NOT EXISTS erp_transactions (
@@ -202,6 +268,46 @@ def init_db():
         )
         '''
     )
+    cur.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS master_entities (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            entity_type TEXT,
+            canonical_name TEXT,
+            first_seen_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            last_seen_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            occurrence_count INTEGER DEFAULT 1,
+            UNIQUE(entity_type, canonical_name)
+        )
+        '''
+    )
+    cur.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS master_entity_aliases (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            entity_type TEXT,
+            raw_value TEXT,
+            canonical_name TEXT,
+            confidence REAL,
+            first_seen_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            last_seen_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            occurrence_count INTEGER DEFAULT 1,
+            UNIQUE(entity_type, raw_value)
+        )
+        '''
+    )
+    cur.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS mdm_resolution_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            entity_type TEXT,
+            raw_value TEXT,
+            canonical_name TEXT,
+            confidence REAL,
+            resolved_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        '''
+    )
     conn.commit()
     conn.close()
     try:
@@ -222,8 +328,12 @@ def save_to_data_lake(records, reset=True):
         financials = r.get("financials", {}) or {}
         shipment = r.get("shipment", {}) or {}
         cur.execute(
+            'DELETE FROM unified_trade WHERE invoice_no = ? AND UPPER(COALESCE(source, "")) = UPPER(COALESCE(?, ""))',
+            (r.get("invoice_no"), r.get("source")),
+        )
+        cur.execute(
             '''
-            INSERT INTO unified_trade
+            INSERT OR REPLACE INTO unified_trade
             (invoice_no, client_name, item, qty, rate, total_value, date, trade_type, origin, destination, source)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''',
@@ -260,6 +370,17 @@ def save_to_data_lake(records, reset=True):
                 INSERT INTO unified_trade
                 (invoice_no, client_name, item, qty, rate, total_value, date, trade_type, origin, destination, source)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (invoice_no, source) DO UPDATE
+                SET client_name = EXCLUDED.client_name,
+                    item = EXCLUDED.item,
+                    qty = EXCLUDED.qty,
+                    rate = EXCLUDED.rate,
+                    total_value = EXCLUDED.total_value,
+                    date = EXCLUDED.date,
+                    trade_type = EXCLUDED.trade_type,
+                    origin = EXCLUDED.origin,
+                    destination = EXCLUDED.destination,
+                    source = EXCLUDED.source
                 ''',
                 (
                     r.get("invoice_no"),
@@ -281,6 +402,119 @@ def save_to_data_lake(records, reset=True):
         print(f"      [POSTGRES WARNING] Data not saved to real instance: {e}")
 
     save_to_vector_db(records, reset=reset)
+
+
+def register_master_entity(entity_type, raw_value, canonical_value, confidence=100.0):
+    entity = str(entity_type or '').strip().upper()
+    raw = str(raw_value or '').strip()
+    canonical = str(canonical_value or '').strip()
+    if not entity or not canonical:
+        return
+
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        '''
+        INSERT INTO master_entities (entity_type, canonical_name, occurrence_count)
+        VALUES (?, ?, 1)
+        ON CONFLICT(entity_type, canonical_name) DO UPDATE SET
+            occurrence_count = occurrence_count + 1,
+            last_seen_at = CURRENT_TIMESTAMP
+        ''',
+        (entity, canonical),
+    )
+    if raw:
+        cur.execute(
+            '''
+            INSERT INTO master_entity_aliases (entity_type, raw_value, canonical_name, confidence, occurrence_count)
+            VALUES (?, ?, ?, ?, 1)
+            ON CONFLICT(entity_type, raw_value) DO UPDATE SET
+                canonical_name = excluded.canonical_name,
+                confidence = excluded.confidence,
+                occurrence_count = occurrence_count + 1,
+                last_seen_at = CURRENT_TIMESTAMP
+            ''',
+            (entity, raw, canonical, float(confidence or 0)),
+        )
+        cur.execute(
+            'INSERT INTO mdm_resolution_log (entity_type, raw_value, canonical_name, confidence) VALUES (?, ?, ?, ?)',
+            (entity, raw, canonical, float(confidence or 0)),
+        )
+    conn.commit()
+    conn.close()
+
+    try:
+        pg = _get_pg_conn()
+        pg_cur = pg.cursor()
+        pg_cur.execute(
+            '''
+            INSERT INTO master_entities (entity_type, canonical_name, occurrence_count)
+            VALUES (%s, %s, 1)
+            ON CONFLICT (entity_type, canonical_name) DO UPDATE
+            SET occurrence_count = master_entities.occurrence_count + 1,
+                last_seen_at = CURRENT_TIMESTAMP
+            ''',
+            (entity, canonical),
+        )
+        if raw:
+            pg_cur.execute(
+                '''
+                INSERT INTO master_entity_aliases (entity_type, raw_value, canonical_name, confidence, occurrence_count)
+                VALUES (%s, %s, %s, %s, 1)
+                ON CONFLICT (entity_type, raw_value) DO UPDATE
+                SET canonical_name = EXCLUDED.canonical_name,
+                    confidence = EXCLUDED.confidence,
+                    occurrence_count = master_entity_aliases.occurrence_count + 1,
+                    last_seen_at = CURRENT_TIMESTAMP
+                ''',
+                (entity, raw, canonical, float(confidence or 0)),
+            )
+            pg_cur.execute(
+                'INSERT INTO mdm_resolution_log (entity_type, raw_value, canonical_name, confidence) VALUES (%s, %s, %s, %s)',
+                (entity, raw, canonical, float(confidence or 0)),
+            )
+        pg.commit()
+        pg.close()
+    except Exception:
+        pass
+
+
+def get_master_data_stats():
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute('SELECT entity_type, COUNT(*) AS count FROM master_entities GROUP BY entity_type')
+    entity_counts = {str(row['entity_type']).lower(): int(row['count']) for row in cur.fetchall()}
+    cur.execute('SELECT COUNT(*) AS count FROM mdm_resolution_log')
+    resolution_count = int(cur.fetchone()['count'])
+    cur.execute(
+        '''
+        SELECT entity_type, raw_value, canonical_name, confidence, resolved_at
+        FROM mdm_resolution_log
+        ORDER BY resolved_at DESC
+        LIMIT 10
+        '''
+    )
+    recent = [dict(row) for row in cur.fetchall()]
+    conn.close()
+    return {
+        'entities': entity_counts,
+        'resolution_count': resolution_count,
+        'recent_resolutions': recent,
+    }
+
+
+def sync_master_data_from_operational_records():
+    for row in get_erp_transactions():
+        register_master_entity('customer', row.get('client_name'), row.get('client_name'), 100)
+        register_master_entity('product', row.get('item'), row.get('item'), 100)
+        register_master_entity('location', row.get('origin'), row.get('origin'), 100)
+        register_master_entity('location', row.get('destination'), row.get('destination'), 100)
+        register_master_entity('location', row.get('port'), row.get('port'), 100)
+
+    for row in get_portal_shipments():
+        register_master_entity('location', row.get('port'), row.get('port'), 100)
 
 
 def seed_erp_transactions(rows):

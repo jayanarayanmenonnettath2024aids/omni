@@ -3,6 +3,8 @@
 import requests
 import json
 import os
+import glob
+from datetime import datetime
 from dotenv import load_dotenv
 from ingestion.erp_ingest import ingest_erp
 from ingestion.email_imap_ingest import ingest_unseen_emails
@@ -21,6 +23,7 @@ from processing.transform import (
 from processing.mdm import apply_mdm
 from ingestion.excel_ingest import ingest_excel
 from processing.database import init_db, save_to_data_lake
+from processing.document_parser import parse_trade_document
 
 def run_pipeline():
     unified_data_lake = []
@@ -57,51 +60,26 @@ def run_pipeline():
 
     print("\n[STEP 3] Ingesting & Processing PDF Documents...")
     try:
-        pdf_path = "data/realistic_trade_invoice.pdf"
-        # In a real scenario, this would loop through a directory
-        text, tables = extract_pdf_text_and_tables(pdf_path)
-        
-        # Simple extraction logic placeholder for the PDF data
-        if "LOG-EXP-2026-002" in text or True: # Force match for demo
-            pdf_data = {
-                "invoice_no": "LOG-EXP-2026-002", 
-                "client_name": "Dubai Textile Hub", 
-                "amount": 900000, 
-                "date": "2026-03-29",
-                "item": "Yarn"
-            }
-            processed = transform_pdf_record(pdf_data)
+        pdf_files = glob.glob(os.path.join("data", "*.pdf"))
+        pdf_count = 0
+        for pdf_path in pdf_files:
+            text, tables = extract_pdf_text_and_tables(pdf_path)
+            parsed = parse_trade_document(text, tables, os.path.basename(pdf_path))
+            if not parsed.get("invoice_no"):
+                parsed["invoice_no"] = f"PDF-{os.path.basename(pdf_path).split('.')[0].upper()}"
+            if not parsed.get("client_name"):
+                parsed["client_name"] = "Document Client"
+            if not parsed.get("date"):
+                parsed["date"] = datetime.now().strftime("%Y-%m-%d")
+            if not parsed.get("item"):
+                parsed["item"] = "Document Shipment"
+            processed = transform_pdf_record(parsed)
             cleaned = apply_mdm(processed)
             unified_data_lake.append(cleaned)
+            pdf_count += 1
             print(f"[OK] Successfully processed PDF: {pdf_path}")
 
-        # Simulate another PDF processing
-        pdf_data_2 = {
-            "invoice_no": "LOG-IMP-2026-030", 
-            "client_name": "Precision Tools", 
-            "amount": 1250000, 
-            "date": "2026-04-12",
-            "item": "Semiconductors"
-        }
-        processed_2 = transform_pdf_record(pdf_data_2)
-        cleaned_2 = apply_mdm(processed_2)
-        unified_data_lake.append(cleaned_2)
-        print(f"[OK] Successfully processed PDF: data/import_license_04.pdf")
-
-        # Simulate Bill of Entry PDF processing
-        pdf_data_3 = {
-            "invoice_no": "LOG-IMP-2026-003", 
-            "client_name": "Oceanic Importers", 
-            "amount": 8000000, 
-            "date": "2026-04-01",
-            "item": "Crude Oil",
-            "type": "IMPORT"
-        }
-        processed_3 = transform_pdf_record(pdf_data_3)
-        cleaned_3 = apply_mdm(processed_3)
-        unified_data_lake.append(cleaned_3)
-        print(f"[OK] Successfully processed PDF: data/import_bill_of_entry_03.pdf")
-        summary["sources"].append({"name": "PDF", "count": 3, "status": "Success"})
+        summary["sources"].append({"name": "PDF", "count": pdf_count, "status": "Success"})
     except Exception as e:
         print(f"[ERROR] PDF Processing Failed: {e}")
         summary["sources"].append({"name": "PDF", "status": "Failed", "error": str(e)})

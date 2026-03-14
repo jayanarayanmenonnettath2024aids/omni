@@ -9,6 +9,7 @@ import LoginOverlay from '../components/LoginOverlay';
 import ERPDataView from '../components/ERPDataView';
 import IngestionView from '../components/IngestionView';
 import AIAssistantView from '../components/AIAssistantView';
+import LiveVoiceAgentView from '../components/LiveVoiceAgentView';
 import MasterDataView from '../components/MasterDataView';
 import TradeMapView from '../components/TradeMapView';
 import OperationsView from '../components/OperationsView';
@@ -53,11 +54,16 @@ const KPIWidget = ({ title, value, icon: Icon, color, active, subValue }) => (
   </div>
 );
 
-const ActivityTable = ({ data, title = 'Recent Activity' }) => (
+const ActivityTable = ({ data, title = 'Recent Activity', onViewAnalytics }) => (
   <div className="bg-white border border-corp-border rounded-2xl enterprise-shadow overflow-hidden">
     <div className="px-6 py-5 border-b border-corp-border flex justify-between items-center bg-gray-50/50">
       <h3 className="text-sm font-black text-corp-dark uppercase tracking-widest">{title}</h3>
-      <button className="text-blue-600 text-xs font-black uppercase tracking-widest hover:underline hover:underline-offset-4 transition-all">View Analytics</button>
+      <button
+        onClick={onViewAnalytics}
+        className="text-blue-600 text-xs font-black uppercase tracking-widest hover:underline hover:underline-offset-4 transition-all"
+      >
+        View Analytics
+      </button>
     </div>
     <div className="overflow-x-auto">
       <table className="w-full">
@@ -135,6 +141,7 @@ const Dashboard = () => {
   const [currentTab, setCurrentTab] = useState('dashboard');
   const [dashboardData, setDashboardData] = useState(null);
   const [loadingData, setLoadingData] = useState(false);
+  const [dashboardError, setDashboardError] = useState('');
 
   const handleLogin = (user) => {
     setUserRole((user?.role || 'super').toLowerCase());
@@ -149,9 +156,30 @@ const Dashboard = () => {
       setLoadingData(true);
       try {
         const deskRes = await fetch(`/api/dashboard/data?role=${encodeURIComponent(userRole)}`);
-        const deskData = await deskRes.json();
+        const rawBody = await deskRes.text();
+        let deskData = null;
+        try {
+          deskData = rawBody ? JSON.parse(rawBody) : null;
+        } catch (_e) {
+          deskData = null;
+        }
+
+        if (!deskRes.ok) {
+          const detail = deskData?.detail || deskData?.message || rawBody || `Request failed with ${deskRes.status}`;
+          throw new Error(typeof detail === 'string' ? detail : `Request failed with ${deskRes.status}`);
+        }
+
+        if (!deskData || typeof deskData !== 'object') {
+          throw new Error('Dashboard service returned an empty response.');
+        }
+
         if (!cancelled) {
           setDashboardData(deskData);
+          setDashboardError('');
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setDashboardError(error?.message || 'Unable to load dashboard data.');
         }
       } finally {
         if (!cancelled) setLoadingData(false);
@@ -258,6 +286,12 @@ const Dashboard = () => {
               <div className="mb-6 text-xs font-black uppercase tracking-widest text-blue-600">Syncing live dashboard data...</div>
             )}
 
+            {dashboardError && (
+              <div className="mb-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
+                {dashboardError}
+              </div>
+            )}
+
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
               <KPIWidget title="Trade Value" value={`INR ${formatCurrencyCompact(insights.total_value)}`} icon={TrendingUp} color="text-emerald-600" active={true} subValue={`${formatInteger(totalTransactions)} visible records`} />
               <KPIWidget title="Visible Shipments" value={formatInteger(insights.total_shipments)} icon={Warehouse} color="text-indigo-600" active={true} subValue={`${formatInteger(insights.pending_shipments)} pending`} />
@@ -362,7 +396,11 @@ const Dashboard = () => {
               <AnalyticsListCard title="Port Activity" rows={portRows} valueLabel="Share of active movement" />
             </div>
 
-            <ActivityTable data={activityData} title={`${userRole === 'super' ? 'Recent Global Activity' : `Recent ${userRole.toUpperCase()} Activity`}`} />
+            <ActivityTable
+              data={activityData}
+              title={`${userRole === 'super' ? 'Recent Global Activity' : `Recent ${userRole.toUpperCase()} Activity`}`}
+              onViewAnalytics={() => setCurrentTab('analytics')}
+            />
           </>
         );
       case 'erp':
@@ -371,6 +409,8 @@ const Dashboard = () => {
         return <IngestionView />;
       case 'ai':
         return <AIAssistantView />;
+      case 'voice-agent':
+        return <LiveVoiceAgentView />;
       case 'documents':
         return <MasterDataView view="documents" />;
       case 'companies':

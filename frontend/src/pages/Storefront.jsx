@@ -5,9 +5,13 @@ const ProductCard = ({ product, onOrder }) => {
   const Icon = product.icon;
   return (
     <div className="group relative flex flex-col bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden hover:shadow-2xl hover:-translate-y-2 transition-all duration-500">
-      <div className={`w-full aspect-[4/3] ${product.bg} flex items-center justify-center p-12 relative overflow-hidden`}>
-        <div className="absolute inset-0 bg-gradient-to-br from-white/20 to-transparent"></div>
+      <div className={`w-full aspect-[4/3] ${product.bg} flex items-center justify-center p-0 relative overflow-hidden`}>
+        <img src={product.image} alt={product.name} className="absolute inset-0 h-full w-full object-cover opacity-65 group-hover:scale-110 transition-transform duration-700" />
+        <div className="absolute inset-0 bg-gradient-to-br from-slate-900/15 via-slate-900/10 to-slate-900/45"></div>
         <Icon size={80} className={`${product.color} relative z-10 group-hover:scale-125 transition-transform duration-700`} />
+        <span className="absolute top-4 left-4 z-10 bg-white/85 text-slate-700 text-[10px] font-black px-2.5 py-1 rounded-full uppercase tracking-tight shadow-sm">
+          {product.tag}
+        </span>
       </div>
       <div className="p-8 flex-1 flex flex-col justify-between">
         <div>
@@ -18,6 +22,10 @@ const ProductCard = ({ product, onOrder }) => {
             <span className="bg-slate-100 text-slate-500 text-[10px] font-black px-2 py-0.5 rounded-full uppercase tracking-tighter">In Stock</span>
           </div>
           <p className="text-xs text-slate-500 font-medium leading-relaxed mb-6 italic">{product.desc}</p>
+          <div className="flex items-center gap-2 mb-6">
+            <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Pack</span>
+            <span className="text-[11px] font-bold text-slate-700 bg-slate-100 px-2 py-1 rounded-lg">{product.pack}</span>
+          </div>
         </div>
         <div className="flex items-center justify-between mt-auto pt-6 border-t border-slate-100">
           <div className="flex flex-col">
@@ -42,10 +50,50 @@ const Storefront = () => {
   const [toastMsg, setToastMsg] = useState('');
 
   const products = [
-    { name: 'HydroFlask Pro (100 Pack)', price: 1500, desc: 'Stainless steel, double-walled. Corporate gifting.', icon: Package, color: 'text-indigo-400', bg: 'bg-indigo-50' },
-    { name: 'ErgoChair Executive', price: 2500, desc: 'Premium ergonomic office seating for HQ.', icon: Wine, color: 'text-emerald-400', bg: 'bg-emerald-50' },
-    { name: 'TerraCotton T-Shirts', price: 800, desc: 'Organic cotton, bulk 100-pack for events.', icon: Tshirt, color: 'text-amber-400', bg: 'bg-amber-50' },
-    { name: 'ZenMaster Yoga Mat', price: 1000, desc: 'Premium non-slip, bulk 50-pack.', icon: Mat, color: 'text-purple-400', bg: 'bg-purple-50' },
+    {
+      name: 'HydroFlask Pro (100 Pack)',
+      price: 1500,
+      desc: 'Stainless steel, double-walled bottles for premium gifting programs.',
+      pack: '100 Units',
+      tag: 'Corporate',
+      image: 'https://images.unsplash.com/photo-1523362628745-0c100150b504?auto=format&fit=crop&w=900&q=80',
+      icon: Package,
+      color: 'text-indigo-100',
+      bg: 'bg-indigo-50'
+    },
+    {
+      name: 'ErgoChair Executive',
+      price: 2500,
+      desc: 'Ergonomic executive seating for HQ floors and command centers.',
+      pack: '25 Units',
+      tag: 'Office',
+      image: 'https://images.unsplash.com/photo-1505843513577-22bb7d21e455?auto=format&fit=crop&w=900&q=80',
+      icon: Wine,
+      color: 'text-emerald-100',
+      bg: 'bg-emerald-50'
+    },
+    {
+      name: 'TerraCotton T-Shirts',
+      price: 800,
+      desc: 'Organic cotton event-ready t-shirts in mixed sizes.',
+      pack: '100 Units',
+      tag: 'Merch',
+      image: 'https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?auto=format&fit=crop&w=900&q=80',
+      icon: Tshirt,
+      color: 'text-amber-100',
+      bg: 'bg-amber-50'
+    },
+    {
+      name: 'ZenMaster Yoga Mat',
+      price: 1000,
+      desc: 'High-grip wellness mats for teams, studios, and fitness kits.',
+      pack: '50 Units',
+      tag: 'Wellness',
+      image: 'https://images.unsplash.com/photo-1603988363607-e1e4a66962c6?auto=format&fit=crop&w=900&q=80',
+      icon: Mat,
+      color: 'text-purple-100',
+      bg: 'bg-purple-50'
+    },
   ];
 
   const handlePlaceOrder = async (product) => {

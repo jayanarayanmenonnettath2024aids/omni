@@ -2,6 +2,23 @@ import React, { useState, useEffect } from 'react';
 import { Plane, Ship, Truck, ShieldAlert } from 'lucide-react';
 import './SlidingAuth.css';
 
+const buildUserIdentity = ({ name, email, role, isPanelActive }) => {
+  const normalizedName = String(name || '').trim();
+  const normalizedEmail = String(email || '').trim();
+  const emailLocalPart = normalizedEmail.includes('@') ? normalizedEmail.split('@')[0] : normalizedEmail;
+  const displayName = normalizedName || emailLocalPart || `${role} user`;
+  const userIdSource = normalizedEmail || normalizedName || role;
+
+  return {
+    role: role.toLowerCase(),
+    display_name: displayName,
+    name: displayName,
+    email: normalizedEmail || null,
+    auth_mode: isPanelActive ? 'signup' : 'signin',
+    user_id: `${role.toLowerCase()}-${userIdSource.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || Date.now()}`,
+  };
+};
+
 const RoleButton = ({ role, label, icon: Icon, color, onClick }) => (
   <button 
     onClick={() => onClick(role)}
@@ -41,11 +58,7 @@ const LoginOverlay = ({ onLogin }) => {
   };
 
   const handleRoleSelect = (role) => {
-    onLogin({ 
-      role: role.toLowerCase(), 
-      display_name: isPanelActive ? (name || 'New Personnel') : 'Authorized Personnel',
-      user_id: 'sliding_user_123'
-    });
+    onLogin(buildUserIdentity({ name, email, role, isPanelActive }));
   };
 
   if (step === 'auth') {

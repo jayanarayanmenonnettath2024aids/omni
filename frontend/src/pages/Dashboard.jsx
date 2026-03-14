@@ -138,6 +138,7 @@ const AnalyticsListCard = ({ title, rows, valueLabel }) => (
 const Dashboard = () => {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [userRole, setUserRole] = useState('super');
+  const [currentUser, setCurrentUser] = useState(null);
   const [currentTab, setCurrentTab] = useState('dashboard');
   const [dashboardData, setDashboardData] = useState(null);
   const [loadingData, setLoadingData] = useState(false);
@@ -145,6 +146,7 @@ const Dashboard = () => {
 
   const handleLogin = (user) => {
     setUserRole((user?.role || 'super').toLowerCase());
+    setCurrentUser(user || null);
     setIsLoggedIn(true);
   };
 
@@ -271,7 +273,10 @@ const Dashboard = () => {
               </div>
               <div className="flex gap-3">
                 <button 
-                  onClick={() => setIsLoggedIn(false)} 
+                  onClick={() => {
+                    setIsLoggedIn(false);
+                    setCurrentUser(null);
+                  }} 
                   className="bg-white border border-red-200 text-red-600 px-5 py-2.5 rounded-xl hover:bg-red-50 font-bold text-xs uppercase tracking-widest transition-all active:scale-95 flex items-center gap-2"
                 >
                   <Clock size={14} /> Switch Desk
@@ -435,7 +440,7 @@ const Dashboard = () => {
   };
 
   return (
-    <Layout currentTab={currentTab} setTab={setCurrentTab} userRole={userRole}>
+    <Layout currentTab={currentTab} setTab={setCurrentTab} userRole={userRole} currentUser={currentUser}>
       {renderContent()}
     </Layout>
   );

@@ -1,7 +1,7 @@
 import React from 'react';
 import CardNav from './CardNav';
 
-const Layout = ({ children, currentTab, setTab, userRole }) => {
+const Layout = ({ children, currentTab, setTab, userRole, currentUser }) => {
   const navItems = [
     {
       label: 'Operations Center',
@@ -47,6 +47,7 @@ const Layout = ({ children, currentTab, setTab, userRole }) => {
         menuColor="#0f172a"
         textColor="#0f172a"
         userRole={userRole}
+        currentUser={currentUser}
         className="z-50 shadow-sm border-b border-corp-border/50"
       />
       

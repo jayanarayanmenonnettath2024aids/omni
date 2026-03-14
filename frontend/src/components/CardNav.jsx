@@ -13,7 +13,8 @@ const CardNav = ({
   baseColor = '#ffffff',
   menuColor = '#0f172a',
   textColor = '#0f172a',
-  userRole
+  userRole,
+  currentUser
 }) => {
   const [isHamburgerOpen, setIsHamburgerOpen] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
@@ -46,6 +47,15 @@ const CardNav = ({
   };
 
   const roleName = getRoleDisplay(userRole);
+  const userName = String(
+    currentUser?.display_name || currentUser?.name || currentUser?.email || roleName || 'User'
+  ).trim();
+  const userInitials = userName
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() || '')
+    .join('') || 'U';
 
   const calculateHeight = () => {
     const navEl = navRef.current;
@@ -216,10 +226,10 @@ const CardNav = ({
                 className="flex items-center gap-3 p-1 pr-2 rounded-full hover:bg-gray-100/20 transition-colors border border-transparent focus:outline-none focus:border-gray-200/50"
               >
                 <div className="w-9 h-9 rounded-full bg-[#0b1731] text-white flex items-center justify-center font-bold text-sm shadow-sm ring-2 ring-white/50">
-                  JS
+                  {userInitials}
                 </div>
                 <div className="hidden md:flex flex-col items-start pr-1" style={{ color: isExpanded ? '#ffffff' : textColor }}>
-                  <span className="text-sm font-bold leading-tight">John Smith</span>
+                  <span className="text-sm font-bold leading-tight">{userName}</span>
                   <span className="text-xs opacity-70 font-medium">{roleName}</span>
                 </div>
                 <ChevronDown size={14} className="hidden md:block transition-colors" style={{ color: isExpanded ? '#ffffff' : menuColor }} />

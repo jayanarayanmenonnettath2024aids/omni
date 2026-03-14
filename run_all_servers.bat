@@ -15,11 +15,26 @@ echo [INFO] NPM: %NPM_EXE%
 
 if /I "%~1"=="--dry-run" goto :dry_run
 
+echo [INFO] Freeing ports 8000, 8001, 5173 (if already in use)...
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr "127.0.0.1:8000 " ^| findstr "LISTENING"') do (
+    echo [INFO] Killing PID %%P on port 8000
+    taskkill /PID %%P /F >nul 2>&1
+)
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr "127.0.0.1:8001 " ^| findstr "LISTENING"') do (
+    echo [INFO] Killing PID %%P on port 8001
+    taskkill /PID %%P /F >nul 2>&1
+)
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr "127.0.0.1:5173 " ^| findstr "LISTENING"') do (
+    echo [INFO] Killing PID %%P on port 5173
+    taskkill /PID %%P /F >nul 2>&1
+)
+timeout /t 2 /nobreak >nul
+
 echo [INFO] Starting ERP API on http://127.0.0.1:8000 ...
-start "ERP API" cmd /k "cd /d "%ROOT_DIR%" && "%PYTHON_EXE%" -m uvicorn erp_mock:app --host 127.0.0.1 --port 8000"
+start "ERP API" cmd /k "cd /d "%ROOT_DIR%" && "%PYTHON_EXE%" -m uvicorn erp_mock:app --host 127.0.0.1 --port 8000 --reload"
 
 echo [INFO] Starting Store Mock API on http://127.0.0.1:8001 ...
-start "Store Mock API" cmd /k "cd /d "%ROOT_DIR%" && "%PYTHON_EXE%" -m uvicorn store_mock:app --host 127.0.0.1 --port 8001"
+start "Store Mock API" cmd /k "cd /d "%ROOT_DIR%" && "%PYTHON_EXE%" -m uvicorn store_mock:app --host 127.0.0.1 --port 8001 --reload"
 
 echo [INFO] Starting Frontend Dev Server on http://127.0.0.1:5173 ...
 start "Frontend Dev Server" cmd /k "cd /d "%ROOT_DIR%frontend" && "%NPM_EXE%" run dev -- --host 127.0.0.1 --port 5173"
